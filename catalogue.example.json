@@ -1,0 +1,54 @@
+{
+  "sections": [
+    {
+      "nom_section": "MATERIEL",
+      "sous_sections": [
+        {
+          "nom_sous_section": "Bétonnage",
+          "otps": [
+            {
+              "code_otp": "1.1",
+              "designation": "Bétonnière électrique",
+              "unite": "Ute",
+              "prix_unitaire_reference": 141.28
+            },
+            {
+              "code_otp": "1.2",
+              "designation": "Bétonnière thermique",
+              "unite": "Ute",
+              "prix_unitaire_reference": 99.49
+            }
+          ]
+        },
+        {
+          "nom_sous_section": "Terrassement",
+          "otps": [
+            {
+              "code_otp": "2.1",
+              "designation": "Camion benne",
+              "unite": "Ute",
+              "prix_unitaire_reference": 141.28
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "nom_section": "HSE",
+      "sous_sections": [
+        {
+          "nom_sous_section": "EPI",
+          "otps": [
+            {
+              "code_otp": "HSE-1",
+              "designation": "Casque de sécurité",
+              "unite": "Ute",
+              "prix_unitaire_reference": 35.0
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+
