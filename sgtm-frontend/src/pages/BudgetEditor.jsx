@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import "../styles.css";
 import {
@@ -9,20 +9,18 @@ import {
   getCatalogueSections,
   getCatalogueSousSections,
   getOrCreateBudget,
+  getProject,
+  deleteLigneOtp,
+  updateLigneOtp,
   recalculateBudget,
   validateBudget,
 } from "../api/api";
+import {
+  getSectionOptionsFromValues,
+  normalizeSectionCode,
+  SECTION_OPTIONS,
+} from "../constants/sections";
 
-const SECTIONS = [
-  { code: "INSTALLATION", label: "INSTALLATION" },
-  { code: "HSE", label: "HSE" },
-  { code: "MASSE_SALARIALE", label: "MASSE SALARIALE" },
-  { code: "MATERIEL", label: "MATÉRIEL" },
-  { code: "GASOIL", label: "GASOIL" },
-  { code: "SOUSTRAITANCE", label: "SOUS TRAITANCE" },
-  { code: "FOURNITURES", label: "FOURNITURES" },
-  { code: "AUTRES", label: "AUTRES CHARGES" },
-];
 const MONTHS = [
   { key: "janvier", month: 1, label: "Janvier" },
   { key: "fevrier", month: 2, label: "Fevrier" },
@@ -43,6 +41,57 @@ const emptyMonthlyQty = () =>
     return acc;
   }, {});
 
+const detailsToYearState = (details = []) =>
+  (Array.isArray(details) ? details : []).reduce((acc, detail) => {
+    const year = Number(detail?.annee);
+    const month = MONTHS.find((m) => m.month === Number(detail?.mois));
+    if (!year || !month) return acc;
+    if (!acc[year]) acc[year] = emptyMonthlyQty();
+    acc[year][month.key] = String(detail?.quantite ?? "");
+    return acc;
+  }, {});
+
+const yearStateToDetails = (yearState = {}) =>
+  Object.entries(yearState).flatMap(([year, months]) =>
+    MONTHS.filter((m) => Number(months?.[m.key] || 0) > 0).map((m) => ({
+      mois: m.month,
+      annee: Number(year),
+      quantite: Number(months[m.key] || 0),
+    }))
+  );
+
+const sumYearState = (yearState = {}) =>
+  Object.values(yearState).reduce(
+    (sum, months) =>
+      sum +
+      MONTHS.reduce((monthSum, month) => monthSum + Number(months?.[month.key] || 0), 0),
+    0
+  );
+
+const maxYearState = (yearState = {}) =>
+  Object.values(yearState).reduce((max, months) => {
+    const yearMax = MONTHS.reduce(
+      (monthMax, month) => Math.max(monthMax, Number(months?.[month.key] || 0)),
+      0
+    );
+    return Math.max(max, yearMax);
+  }, 0);
+
+const getYearsBetweenDates = (startDate, endDate) => {
+  const start = startDate ? new Date(startDate) : null;
+  const end = endDate ? new Date(endDate) : null;
+  const startYear = start && !Number.isNaN(start.getTime()) ? start.getFullYear() : null;
+  const endYear = end && !Number.isNaN(end.getTime()) ? end.getFullYear() : null;
+  const fallback = new Date().getFullYear();
+  const first = startYear ?? fallback;
+  const last = endYear ?? first;
+  const years = [];
+  for (let year = first; year <= last; year += 1) {
+    years.push(year);
+  }
+  return years.length ? years : [fallback];
+};
+
 const normalize = (s) =>
   String(s || "")
     .normalize("NFD")
@@ -52,7 +101,7 @@ const normalize = (s) =>
 
 const findSectionInScope = (scope, activeSectionCode) => {
   const wanted = normalize(activeSectionCode);
-  const label = SECTIONS.find((x) => x.code === activeSectionCode)?.label;
+  const label = SECTION_OPTIONS.find((x) => x.code === activeSectionCode)?.label;
   const wantedLabel = normalize(label);
   const sections = scope?.sections || [];
 
@@ -63,27 +112,96 @@ const findSectionInScope = (scope, activeSectionCode) => {
   );
 };
 
+const MATERIAL_SUBSECTIONS = [
+  "Transport",
+  "Terrassement",
+  "Levage",
+  "Betonnage",
+  "Autre",
+];
+
+const MATERIAL_SUBSECTION_MAP = {
+  TRANSPORT: "Transport",
+  TERRASSEMENT: "Terrassement",
+  LEVAGE: "Levage",
+  BETONNAGE: "Betonnage",
+  AUTRE: "Autre",
+};
+
+const parseUnitPrice = (value) => {
+  const parsed = Number(String(value || "").replace(",", ".").trim());
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const parseFlexibleNumber = (value) => {
+  const parsed = Number(String(value || "").replace(",", ".").trim());
+  return Number.isFinite(parsed) ? parsed : NaN;
+};
+
+const parseMaterialCatalogueCsv = (csvText) =>
+  String(csvText || "")
+    .split(/\r?\n/)
+    .slice(1)
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => line.trim().length > 0)
+    .map(({ line, index }) => {
+      const [rawSousSection = "", rawArticle = "", rawPu = ""] = line.split(";");
+      const sousSection = MATERIAL_SUBSECTION_MAP[normalize(rawSousSection)];
+
+      if (!sousSection) return null;
+
+      return {
+        id: `materiel-${index + 1}`,
+        code_otp: "-",
+        sousSection,
+        designation: rawArticle.trim(),
+        unite: "-",
+        prix_unitaire_reference: parseUnitPrice(rawPu),
+      };
+    })
+    .filter(Boolean);
+
 export default function BudgetEditor() {
   const { projectId } = useParams();
-  const [activeSection, setActiveSection] = useState(SECTIONS[3].code);
+  const [activeSection, setActiveSection] = useState(SECTION_OPTIONS[3].code);
   const [activeScopeId, setActiveScopeId] = useState(null);
 
   const [budget, setBudget] = useState(null);
+  const [project, setProject] = useState(null);
   const [scopes, setScopes] = useState([]);
   const [catalogueSections, setCatalogueSections] = useState([]);
   const [catalogueSousSections, setCatalogueSousSections] = useState([]);
   const [catalogueOtps, setCatalogueOtps] = useState([]);
+  const [materialCatalogue, setMaterialCatalogue] = useState([]);
 
   const [subsection, setSubsection] = useState("");
   const [otpId, setOtpId] = useState("");
   const [article, setArticle] = useState("");
+  const [articleQuery, setArticleQuery] = useState("");
+  const [articlePickerOpen, setArticlePickerOpen] = useState(false);
+  const articleWrapRef = useRef(null);
   const [unit, setUnit] = useState("");
+  const [nombreJours, setNombreJours] = useState("1");
   const [pu, setPu] = useState("");
   const [remise, setRemise] = useState("");
-  const [monthlyQty, setMonthlyQty] = useState(emptyMonthlyQty());
-  const [monthlyQtyDraft, setMonthlyQtyDraft] = useState(emptyMonthlyQty());
+  const [monthlyQtyByYear, setMonthlyQtyByYear] = useState({});
+  const [monthlyQtyDraftByYear, setMonthlyQtyDraftByYear] = useState({});
+  const [modalYears, setModalYears] = useState([]);
+  const [activeModalYear, setActiveModalYear] = useState("");
   const [showMonthlyModal, setShowMonthlyModal] = useState(false);
   const [modalMode, setModalMode] = useState("edit");
+  const [editingLineId, setEditingLineId] = useState(null);
+  const lineFormRef = useRef({
+    subsection: "",
+    otpId: "",
+    article: "",
+    articleQuery: "",
+    unit: "",
+    nombreJours: "1",
+    pu: "",
+    monthlyQtyByYear: {},
+    monthlyQtyDraftByYear: {},
+  });
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -99,12 +217,52 @@ export default function BudgetEditor() {
       if (!activeScopeId && Array.isArray(b?.scopes) && b.scopes.length > 0) {
         setActiveScopeId(b.scopes[0].id);
       }
+      return b;
     } catch (e) {
       setError(e?.message || "Erreur API");
+      return null;
     } finally {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const response = await fetch(`${process.env.PUBLIC_URL}/data/materiel-catalogue.csv`);
+        if (!response.ok) {
+          throw new Error("Catalogue Materiel introuvable.");
+        }
+
+        const csvText = await response.text();
+        setMaterialCatalogue(parseMaterialCatalogueCsv(csvText));
+      } catch (e) {}
+    })();
+  }, []);
+
+  useEffect(() => {
+    lineFormRef.current = {
+      subsection,
+      otpId,
+      article,
+      articleQuery,
+      unit,
+      nombreJours,
+      pu,
+      monthlyQtyByYear,
+      monthlyQtyDraftByYear,
+    };
+  }, [
+    subsection,
+    otpId,
+    article,
+    articleQuery,
+    unit,
+    nombreJours,
+    pu,
+    monthlyQtyByYear,
+    monthlyQtyDraftByYear,
+  ]);
 
   useEffect(() => {
     (async () => {
@@ -126,17 +284,42 @@ export default function BudgetEditor() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectId]);
 
+  useEffect(() => {
+    const handlePointerDown = (event) => {
+      if (!articleWrapRef.current) return;
+      if (!articleWrapRef.current.contains(event.target)) {
+        setArticlePickerOpen(false);
+      }
+    };
+
+    document.addEventListener("mousedown", handlePointerDown);
+    return () => document.removeEventListener("mousedown", handlePointerDown);
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const data = await getProject(projectId);
+        setProject(data);
+      } catch (e) {
+        // Le budget peut rester utilisable même si le projet ne se recharge pas ici.
+      }
+    })();
+  }, [projectId]);
+
   // Quand on change de scope (ou d'onglet), on vide les champs de saisie
   useEffect(() => {
-    setMonthlyQty(emptyMonthlyQty());
     setRemise("");
     setShowMonthlyModal(false);
+    setArticleQuery("");
+    setArticlePickerOpen(false);
+    setNombreJours("1");
 
     // remettre PU/unité/designation sur la référence catalogue (si OTP sélectionné)
-    const found = catalogueOtps.find((o) => String(o.id) === String(otpId));
+    const found = availableCatalogueOtps.find((o) => String(o.id) === String(otpId));
     if (found) {
       setArticle(found.designation || "");
-      setUnit(found.unite || "");
+      setUnit("Jour/Mois");
       setPu(
         found.prix_unitaire_reference != null
           ? String(found.prix_unitaire_reference)
@@ -151,31 +334,100 @@ export default function BudgetEditor() {
     [scopes, activeScopeId]
   );
 
-  // Si un scope n'a pas encore de sections, on l'initialise avec tout le catalogue
-  useEffect(() => {
-    if (!activeScope || catalogueSections.length === 0) return;
-    if (Array.isArray(activeScope.sections) && activeScope.sections.length > 0) return;
+  const projectScopeList = useMemo(() => {
+    try {
+      const raw = project?.scope;
+      if (!raw) return [];
+      const parsed = typeof raw === "string" ? JSON.parse(raw) : raw;
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }, [project]);
 
-    (async () => {
-      try {
-        await assignSectionsToScope(
-          activeScope.id,
-          catalogueSections.map((c) => c.id)
-        );
-        await refreshBudget();
-      } catch (e) {
-        setError(e?.message || "Erreur API (assign sections)");
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeScopeId, catalogueSections.length]);
+  const activeProjectScope = useMemo(() => {
+    if (!activeScope) return null;
+    const activeName = normalize(activeScope.nom);
+    return (
+      projectScopeList.find((item) => normalize(item?.nom || item?.name) === activeName) ||
+      null
+    );
+  }, [activeScope, projectScopeList]);
+
+  const scopeYears = useMemo(() => {
+    const start = activeProjectScope?.date_debut || project?.scope_start_date || project?.start_date;
+    const end = activeProjectScope?.date_fin || project?.scope_end_date || project?.end_date;
+    return getYearsBetweenDates(start, end);
+  }, [activeProjectScope, project]);
+
+  const activeSectionCodes = useMemo(() => {
+    if (!activeScope) return [];
+    return (activeScope.sections || [])
+      .map((section) => normalizeSectionCode(section.nom))
+      .filter(Boolean);
+  }, [activeScope]);
+
+  const visibleSections = useMemo(
+    () => getSectionOptionsFromValues(activeSectionCodes),
+    [activeSectionCodes]
+  );
+
+  const isMaterialSection = activeSection === "MATERIEL";
+
+  const materialSousSections = useMemo(
+    () =>
+      MATERIAL_SUBSECTIONS.filter((name) =>
+        materialCatalogue.some((item) => item.sousSection === name)
+      ).map((name) => ({
+        id: name,
+        nom_sous_section: name,
+      })),
+    [materialCatalogue]
+  );
+
+  const materialOtps = useMemo(
+    () =>
+      materialCatalogue
+        .filter((item) => item.sousSection === subsection)
+        .map((item) => ({
+          id: item.id,
+          code_otp: item.code_otp,
+          designation: item.designation,
+          unite: item.unite,
+          prix_unitaire_reference: item.prix_unitaire_reference,
+        })),
+    [materialCatalogue, subsection]
+  );
+
+  const availableCatalogueSousSections = isMaterialSection
+    ? materialSousSections
+    : catalogueSousSections;
+
+  const availableCatalogueOtps = isMaterialSection ? materialOtps : catalogueOtps;
+
+  const filteredCatalogueOtps = useMemo(() => {
+    const query = String(articleQuery || "").trim().toLowerCase();
+    if (!query) return availableCatalogueOtps;
+    return availableCatalogueOtps
+      .filter((item) => {
+        const searchable = [item.designation, item.code_otp, item.unite]
+          .map((value) => String(value || "").toLowerCase())
+          .join(" ");
+        return searchable.includes(query);
+      })
+      ;
+  }, [availableCatalogueOtps, articleQuery]);
+
+  const totalQtyFromMonthly = useMemo(() => {
+    return maxYearState(monthlyQtyByYear);
+  }, [monthlyQtyByYear]);
 
   const filteredLines = useMemo(() => {
     if (!activeScope) return [];
     const section = findSectionInScope(activeScope, activeSection);
     if (!section) return [];
 
-    const out = [];
+        const out = [];
     for (const ss of section.sous_sections || []) {
       for (const line of ss.lignes_otp || []) {
         out.push({
@@ -184,6 +436,7 @@ export default function BudgetEditor() {
           subsection: ss.nom,
           article: line.designation,
           unit: line.unite,
+          nombreJours: line.nombre_jours ?? 1,
           pu: line.prix_unitaire,
           qty: line.quantite_globale,
           total: line.montant_total,
@@ -196,14 +449,11 @@ export default function BudgetEditor() {
     return out;
   }, [activeScope, activeSection]);
 
-  const totalQtyFromMonthly = useMemo(() => {
-    return MONTHS.reduce((sum, m) => sum + Number(monthlyQty[m.key] || 0), 0);
-  }, [monthlyQty]);
-
   const currentLineGross = useMemo(() => {
     const p = Number(pu || 0);
-    return totalQtyFromMonthly * p;
-  }, [totalQtyFromMonthly, pu]);
+    const d = Math.min(30, Math.max(1, Number(nombreJours || 1)));
+    return totalQtyFromMonthly * p * d;
+  }, [totalQtyFromMonthly, pu, nombreJours]);
 
   const currentLineTotal = useMemo(() => {
     const r = Math.min(100, Math.max(0, Number(remise || 0)));
@@ -215,15 +465,6 @@ export default function BudgetEditor() {
     const r = Math.min(100, Math.max(0, Number(remise || 0)));
     return Math.max(0, currentLineGross * (r / 100));
   }, [currentLineGross, remise]);
-
-  const monthlyAmounts = useMemo(() => {
-    const p = Number(pu || 0);
-    return MONTHS.map((m) => ({
-      ...m,
-      qty: Number(monthlyQty[m.key] || 0),
-      amount: Number(monthlyQty[m.key] || 0) * p,
-    }));
-  }, [monthlyQty, pu]);
 
   const totalScope = useMemo(() => {
     if (!activeScope) return 0;
@@ -253,7 +494,7 @@ export default function BudgetEditor() {
 
   const activeCatalogueSection = useMemo(() => {
     const wanted = normalize(activeSection);
-    const label = SECTIONS.find((x) => x.code === activeSection)?.label;
+    const label = SECTION_OPTIONS.find((x) => x.code === activeSection)?.label;
     const wantedLabel = normalize(label);
     return (
       catalogueSections.find((c) => normalize(c.nom_section) === wanted) ||
@@ -263,6 +504,28 @@ export default function BudgetEditor() {
   }, [catalogueSections, activeSection]);
 
   useEffect(() => {
+    if (!visibleSections.length) return;
+    const stillVisible = visibleSections.some((section) => section.code === activeSection);
+    if (!stillVisible) {
+      setActiveSection(visibleSections[0].code);
+    }
+  }, [activeSection, visibleSections]);
+
+  useEffect(() => {
+    if (isMaterialSection) {
+      setCatalogueSousSections([]);
+      setSubsection((current) => {
+        if (
+          current &&
+          materialSousSections.some((item) => item.nom_sous_section === current)
+        ) {
+          return current;
+        }
+        return "";
+      });
+      return;
+    }
+
     if (!activeCatalogueSection) {
       setCatalogueSousSections([]);
       setSubsection("");
@@ -273,19 +536,22 @@ export default function BudgetEditor() {
         const ss = await getCatalogueSousSections(activeCatalogueSection.id);
         const list = Array.isArray(ss) ? ss : [];
         setCatalogueSousSections(list);
-        setSubsection(list[0]?.nom_sous_section || "");
+        setSubsection("");
       } catch (e) {
         setError(e?.message || "Erreur API (catalogue sous-sections)");
       }
     })();
-  }, [activeCatalogueSection?.id]);
+  }, [activeCatalogueSection, isMaterialSection, materialSousSections]);
 
   useEffect(() => {
+    if (isMaterialSection) {
+      setCatalogueOtps([]);
+      return;
+    }
+
     const selected = catalogueSousSections.find((x) => x.nom_sous_section === subsection);
     if (!selected) {
       setCatalogueOtps([]);
-      setOtpId("");
-      setArticle("");
       return;
     }
 
@@ -294,32 +560,171 @@ export default function BudgetEditor() {
         const otps = await getCatalogueOtps(selected.id);
         const list = Array.isArray(otps) ? otps : [];
         setCatalogueOtps(list);
-        const first = list[0] || null;
-        setOtpId(first ? String(first.id) : "");
-        setArticle(first?.designation || "");
-        setUnit(first?.unite || "");
-        setPu(first?.prix_unitaire_reference != null ? String(first.prix_unitaire_reference) : "");
       } catch (e) {
         setError(e?.message || "Erreur API (catalogue OTPs)");
       }
     })();
-  }, [subsection, catalogueSousSections]);
+  }, [
+    subsection,
+    catalogueSousSections,
+    isMaterialSection,
+    materialOtps,
+    editingLineId,
+    modalMode,
+    showMonthlyModal,
+  ]);
 
-  const onOtpChange = (value) => {
-    setOtpId(value);
-    const found = catalogueOtps.find((o) => String(o.id) === String(value));
-    if (found) {
-      setArticle(found.designation || "");
-      setUnit(found.unite || "");
-      setPu(found.prix_unitaire_reference != null ? String(found.prix_unitaire_reference) : "");
+  useEffect(() => {
+    const found = availableCatalogueOtps.find((o) => String(o.id) === String(otpId));
+    if (!found) {
+      return;
+    }
+
+    setArticle(found.designation || "");
+    setArticleQuery(found.designation || "");
+    setUnit("Jour/Mois");
+    setPu(
+      found.prix_unitaire_reference != null
+        ? String(found.prix_unitaire_reference)
+        : ""
+    );
+  }, [otpId, availableCatalogueOtps, editingLineId, modalMode, showMonthlyModal]);
+
+  const onArticleQueryChange = (value) => {
+    setArticleQuery(value);
+    setArticlePickerOpen(true);
+    lineFormRef.current.articleQuery = value;
+
+    const normalized = normalize(value);
+    const exact = availableCatalogueOtps.find((item) => {
+      const designation = normalize(item.designation);
+      const code = normalize(item.code_otp);
+      return designation === normalized || code === normalized;
+    });
+
+    if (exact) {
+      const nextOtpId = String(exact.id);
+      const selectionChanged = String(otpId || "") !== nextOtpId;
+      setOtpId(nextOtpId);
+      lineFormRef.current.otpId = nextOtpId;
+      setArticle(exact.designation || "");
+      lineFormRef.current.article = exact.designation || "";
+      setUnit("Jour/Mois");
+      lineFormRef.current.unit = "Jour/Mois";
+      setPu(
+        exact.prix_unitaire_reference != null
+          ? String(exact.prix_unitaire_reference)
+          : ""
+      );
+      lineFormRef.current.pu =
+        exact.prix_unitaire_reference != null
+          ? String(exact.prix_unitaire_reference)
+          : "";
+      if (selectionChanged) {
+        setMonthlyQtyByYear({});
+        setMonthlyQtyDraftByYear({});
+        lineFormRef.current.monthlyQtyByYear = {};
+        lineFormRef.current.monthlyQtyDraftByYear = {};
+        setNombreJours("1");
+        lineFormRef.current.nombreJours = "1";
+        setModalYears([]);
+        setActiveModalYear("");
+        setShowMonthlyModal(false);
+      }
+    } else {
+      setOtpId("");
+      lineFormRef.current.otpId = "";
+      setArticle(value);
+      lineFormRef.current.article = value;
+      setUnit("");
+      lineFormRef.current.unit = "";
+      setPu("");
+      lineFormRef.current.pu = "";
     }
   };
 
-  const addLine = async () => {
-    const q = Number(totalQtyFromMonthly || 0);
+  const selectArticle = (item) => {
+    const nextOtpId = String(item.id);
+    const selectionChanged = String(otpId || "") !== nextOtpId;
+    setOtpId(nextOtpId);
+    lineFormRef.current.otpId = nextOtpId;
+    setArticle(item.designation || "");
+    setArticleQuery(item.designation || "");
+    lineFormRef.current.article = item.designation || "";
+    lineFormRef.current.articleQuery = item.designation || "";
+    setArticlePickerOpen(false);
+    setUnit("Jour/Mois");
+    lineFormRef.current.unit = "Jour/Mois";
+    setPu(item.prix_unitaire_reference != null ? String(item.prix_unitaire_reference) : "");
+    lineFormRef.current.pu =
+      item.prix_unitaire_reference != null ? String(item.prix_unitaire_reference) : "";
+    if (selectionChanged) {
+      setMonthlyQtyByYear({});
+      setMonthlyQtyDraftByYear({});
+      lineFormRef.current.monthlyQtyByYear = {};
+      lineFormRef.current.monthlyQtyDraftByYear = {};
+      setNombreJours("1");
+      lineFormRef.current.nombreJours = "1";
+      setModalYears([]);
+      setActiveModalYear("");
+      setShowMonthlyModal(false);
+    }
+  };
+
+  const ensureActiveSectionInScope = async () => {
+    if (!activeScope) return null;
+
+    const existingSection = findSectionInScope(activeScope, activeSection);
+    if (existingSection) return existingSection;
+    const scopeCatalogueSectionId =
+      activeCatalogueSection?.id || activeScope?.section_id || catalogueSections[0]?.id;
+
+    if (!scopeCatalogueSectionId) {
+      if (visibleSections.length > 0) {
+        setActiveSection(visibleSections[0].code);
+      }
+      return null;
+    }
+
+    await assignSectionsToScope(activeScope.id, [scopeCatalogueSectionId]);
+    const refreshedBudget = await refreshBudget();
+    const refreshedScopes = Array.isArray(refreshedBudget?.scopes)
+      ? refreshedBudget.scopes
+      : [];
+    const refreshedScope =
+      refreshedScopes.find((scope) => scope.id === activeScope.id) || null;
+
+    return findSectionInScope(refreshedScope, activeSection);
+  };
+
+  const addLine = async (yearState = monthlyQtyByYear) => {
+    const snapshot = lineFormRef.current || {};
+    const effectiveYearState =
+      snapshot.monthlyQtyByYear && Object.keys(snapshot.monthlyQtyByYear).length > 0
+        ? snapshot.monthlyQtyByYear
+        : yearState && Object.keys(yearState).length > 0
+        ? yearState
+        : snapshot.monthlyQtyDraftByYear && Object.keys(snapshot.monthlyQtyDraftByYear).length > 0
+        ? snapshot.monthlyQtyDraftByYear
+        : monthlyQtyDraftByYear;
+    const q = Number(sumYearState(effectiveYearState) || 0);
     const r = Math.min(100, Math.max(0, Number(remise || 0)));
-    if (!subsection || !article || !unit || !pu || q <= 0) {
-      alert("Veuillez remplir l'article, P.U et les détails des quantités.");
+    const effectiveArticle = String(snapshot.article || snapshot.articleQuery || article || articleQuery || "").trim();
+    const effectiveUnit = "Jour/Mois";
+    const effectivePu = parseFlexibleNumber(snapshot.pu || pu);
+    const effectiveNombreJours = Math.min(
+      30,
+      Math.max(1, Math.floor(Number(snapshot.nombreJours || nombreJours || 1)))
+    );
+    const effectiveSubsection = String(snapshot.subsection || subsection || "").trim();
+    const effectiveOtpId = String(snapshot.otpId || otpId || "");
+
+    if (!effectiveSubsection || !effectiveArticle || !effectiveUnit || !Number.isFinite(effectivePu) || q <= 0) {
+      alert("Veuillez remplir l'article, le P.U et les détails des quantités.");
+      return;
+    }
+    if (!Number.isFinite(effectiveNombreJours) || effectiveNombreJours < 1 || effectiveNombreJours > 30) {
+      alert("Le nombre de jours doit être compris entre 1 et 30.");
       return;
     }
     if (Number.isNaN(r) || r < 0 || r > 100) {
@@ -332,45 +737,73 @@ export default function BudgetEditor() {
       return;
     }
 
-    const section = findSectionInScope(activeScope, activeSection);
-    if (!section) {
-      alert("Section non disponible pour ce scope.");
-      return;
-    }
-
     try {
+      const section = await ensureActiveSectionInScope();
+      if (!section) {
+        alert("Section non disponible pour ce scope.");
+        return;
+      }
+
       // 1) s'assurer que la sous-section existe dans cette section budgetaire
       let existingSs =
-        (section.sous_sections || []).find((x) => x.nom === subsection) || null;
+        (section.sous_sections || []).find((x) => x.nom === effectiveSubsection) || null;
       if (!existingSs) {
-        existingSs = await createSousSection(section.id, { nom: subsection });
+        existingSs = await createSousSection(section.id, { nom: effectiveSubsection });
       }
 
       // 2) créer la ligne OTP en DB
-      const foundOtp = catalogueOtps.find((o) => String(o.id) === String(otpId));
+      const foundOtp = availableCatalogueOtps.find(
+        (o) => String(o.id) === effectiveOtpId
+      );
       const payload = {
         code_otp: foundOtp?.code_otp || "-",
-        designation: article,
-        unite: unit,
+        designation: effectiveArticle,
+        unite: effectiveUnit,
         quantite_globale: q,
-        prix_unitaire: Number(pu || 0),
-        montant_total: Number(currentLineTotal.toFixed(2)),
-        details_mensuels: MONTHS.filter((m) => Number(monthlyQty[m.key] || 0) > 0).map((m) => ({
-          mois: m.month,
-          annee: new Date().getFullYear(),
-          quantite: Number(monthlyQty[m.key] || 0),
-        })),
+        prix_unitaire: effectivePu,
+        montant_total: Number((q * effectivePu * effectiveNombreJours * (1 - r / 100)).toFixed(2)),
+        nombre_jours: effectiveNombreJours,
+        details_mensuels: yearStateToDetails(effectiveYearState),
       };
-      await createLigneOtp(existingSs.id, payload);
+      if (editingLineId) {
+        await updateLigneOtp(editingLineId, payload);
+      } else {
+        await createLigneOtp(existingSs.id, payload);
+      }
 
       // 3) refresh budget (inclut toutes les lignes)
       await refreshBudget();
 
-      setMonthlyQty(emptyMonthlyQty());
+      setSubsection("");
+      setArticle("");
+      setArticleQuery("");
+      setOtpId("");
+      setUnit("Jour/Mois");
+      setNombreJours("1");
+      lineFormRef.current.unit = "Jour/Mois";
+      lineFormRef.current.nombreJours = "1";
+      setPu("");
       setRemise("");
+      setMonthlyQtyByYear({});
+      setMonthlyQtyDraftByYear({});
+      setModalYears([]);
+      setActiveModalYear("");
+      setEditingLineId(null);
+      setArticlePickerOpen(false);
       setShowMonthlyModal(false);
     } catch (e) {
       alert(e?.message || "Erreur API ❌");
+    }
+  };
+
+  const deleteLine = async (lineId) => {
+    const confirmed = window.confirm("Supprimer cette ligne ?");
+    if (!confirmed) return;
+    try {
+      await deleteLigneOtp(lineId);
+      await refreshBudget();
+    } catch (e) {
+      alert(e?.message || "Erreur API âŒ");
     }
   };
 
@@ -399,54 +832,128 @@ export default function BudgetEditor() {
 
   const openMonthlyModal = (mode = "edit", line = null) => {
     setModalMode(mode);
-    if (mode === "view" && line) {
-      const map = emptyMonthlyQty();
-      for (const d of line.detailsMensuels || []) {
-        const found = MONTHS.find((m) => m.month === d.mois);
-        if (found) map[found.key] = String(d.quantite || 0);
-      }
-      setMonthlyQtyDraft(map);
+    setEditingLineId(line?.id || null);
+    const yearsFromLine = line
+      ? Object.keys(detailsToYearState(line.detailsMensuels || {})).map(Number)
+      : [];
+    const initialYears = Array.from(
+      new Set([...(scopeYears.length ? scopeYears : [new Date().getFullYear()]), ...yearsFromLine])
+    ).sort((a, b) => a - b);
+
+    if (line) {
+      setModalYears(initialYears.map((year) => Number(year)));
+      setActiveModalYear(String(initialYears[0]));
+      const nextDraft = detailsToYearState(line.detailsMensuels || []);
+      setMonthlyQtyDraftByYear(nextDraft);
+      lineFormRef.current.monthlyQtyDraftByYear = nextDraft;
+      lineFormRef.current.monthlyQtyByYear = {};
+      setSubsection(line.subsection || "");
+      lineFormRef.current.subsection = line.subsection || "";
+      setArticle(line.article || "");
+      lineFormRef.current.article = line.article || "";
+      setArticleQuery(line.article || "");
+      lineFormRef.current.articleQuery = line.article || "";
+      const matchedOtp = availableCatalogueOtps.find((item) => {
+        const matchDesignation = normalize(item.designation) === normalize(line.article);
+        const matchCode = normalize(item.code_otp) === normalize(line.otp);
+        return matchDesignation || matchCode;
+      });
+      setOtpId(matchedOtp ? String(matchedOtp.id) : "");
+      lineFormRef.current.otpId = matchedOtp ? String(matchedOtp.id) : "";
+      setUnit(line.unit || "Jour/Mois");
+      lineFormRef.current.unit = line.unit || "Jour/Mois";
+      setNombreJours(String(line.nombreJours ?? line.nombre_jours ?? 1));
+      lineFormRef.current.nombreJours = String(line.nombreJours ?? line.nombre_jours ?? 1);
+      setPu(line.pu != null ? String(line.pu) : "");
+      lineFormRef.current.pu = line.pu != null ? String(line.pu) : "";
+      setRemise("");
     } else {
-      setMonthlyQtyDraft({ ...monthlyQty });
+      const draft = {};
+      for (const year of initialYears) {
+        draft[year] = emptyMonthlyQty();
+      }
+      setMonthlyQtyByYear({});
+      setMonthlyQtyDraftByYear(draft);
+      lineFormRef.current.monthlyQtyByYear = {};
+      lineFormRef.current.monthlyQtyDraftByYear = draft;
+      lineFormRef.current.subsection = subsection;
+      setUnit("Jour/Mois");
+      lineFormRef.current.unit = "Jour/Mois";
+      setNombreJours("1");
+      lineFormRef.current.nombreJours = "1";
+      setModalYears(initialYears.map((year) => Number(year)));
+      setActiveModalYear(String(initialYears[0]));
     }
     setShowMonthlyModal(true);
   };
 
-  const modalQty = modalMode === "edit" ? monthlyQtyDraft : monthlyQtyDraft;
-  const totalQtyInModal = MONTHS.reduce(
-    (sum, m) => sum + Number(modalQty[m.key] || 0),
-    0
-  );
+  const modalQty = monthlyQtyDraftByYear[Number(activeModalYear)] || emptyMonthlyQty();
+  const totalQtyInModal = maxYearState({ [activeModalYear]: modalQty });
   const monthlyAmountsInModal = MONTHS.map((m) => ({
     ...m,
     qty: Number(modalQty[m.key] || 0),
-    amount: Number(modalQty[m.key] || 0) * Number(pu || 0),
+    amount:
+      Number(modalQty[m.key] || 0) * Number(pu || 0) * Math.min(30, Math.max(1, Number(nombreJours || 1))),
   }));
   const grossInModal = monthlyAmountsInModal.reduce((sum, m) => sum + m.amount, 0);
   const discountInModal = grossInModal * (Math.min(100, Math.max(0, Number(remise || 0))) / 100);
   const netInModal = Math.max(0, grossInModal - discountInModal);
 
-  const onConfirmMonthlyModal = () => {
+  const onConfirmMonthlyModal = async () => {
+    if (modalMode === "edit" && editingLineId) {
+      await addLine(monthlyQtyDraftByYear);
+      return;
+    }
     if (modalMode === "edit") {
-      setMonthlyQty({ ...monthlyQtyDraft });
+      const nextQty = { ...monthlyQtyDraftByYear };
+      lineFormRef.current.monthlyQtyByYear = nextQty;
+      lineFormRef.current.monthlyQtyDraftByYear = nextQty;
+      setMonthlyQtyByYear(nextQty);
     }
     setShowMonthlyModal(false);
   };
 
+  const addModalYearSlot = () => {
+    const currentIndex = modalYears.indexOf(Number(activeModalYear));
+    const nextYear = modalYears[currentIndex + 1] || modalYears[modalYears.length - 1] + 1;
+    setModalYears((prev) => (prev.includes(nextYear) ? prev : [...prev, nextYear]));
+    setMonthlyQtyDraftByYear((prev) => {
+      return {
+        ...prev,
+        [nextYear]: emptyMonthlyQty(),
+      };
+    });
+    setActiveModalYear(String(nextYear));
+  };
+
+  const removeModalYearSlot = () => {
+    if (modalYears.length <= 1) return;
+    const currentYear = Number(activeModalYear);
+    const fallbackYear = modalYears.find((year) => year !== currentYear) || modalYears[0];
+    setModalYears((prev) => prev.filter((year) => year !== currentYear));
+    setMonthlyQtyDraftByYear((prev) => {
+      const next = { ...prev };
+      delete next[currentYear];
+      return next;
+    });
+    setActiveModalYear(String(fallbackYear));
+  };
+
   const onCancelMonthlyModal = () => {
-    // Annulation complète: on vide les valeurs du popup et du formulaire principal
-    const reset = emptyMonthlyQty();
-    setMonthlyQtyDraft(reset);
-    if (modalMode === "edit") {
-      setMonthlyQty(reset);
-    }
+    setEditingLineId(null);
+    setMonthlyQtyDraftByYear({});
+    lineFormRef.current.monthlyQtyDraftByYear = {};
+    setNombreJours("1");
+    lineFormRef.current.nombreJours = "1";
+    setModalYears([]);
+    setActiveModalYear("");
     setShowMonthlyModal(false);
   };
 
   return (
     <div className="budget-page">
       <div className="budget-top-tabs">
-        {SECTIONS.map((s) => (
+        {SECTION_OPTIONS.map((s) => (
           <button
             key={s.code}
             type="button"
@@ -522,46 +1029,106 @@ export default function BudgetEditor() {
         <div className="budget-main">
           <div className="budget-grid">
             <div className="budget-block">
-              <label className="budget-label">Sous-section</label>
-              <select
-                value={subsection}
-                onChange={(e) => setSubsection(e.target.value)}
-              >
-                {catalogueSousSections.map((x) => (
-                  <option key={x.id} value={x.nom_sous_section}>
-                    {x.nom_sous_section}
+              <div className="budget-field-row">
+                <label className="budget-label">Sous-section</label>
+                <select
+                  value={subsection}
+                  onChange={(e) => {
+                    const nextValue = e.target.value;
+                    setSubsection(e.target.value);
+                    lineFormRef.current.subsection = nextValue;
+                    setOtpId("");
+                    lineFormRef.current.otpId = "";
+                    setArticle("");
+                    lineFormRef.current.article = "";
+                    setArticleQuery("");
+                    lineFormRef.current.articleQuery = "";
+                    setUnit("");
+                    lineFormRef.current.unit = "";
+                    setPu("");
+                    lineFormRef.current.pu = "";
+                    setArticlePickerOpen(false);
+                    setMonthlyQtyByYear({});
+                    setMonthlyQtyDraftByYear({});
+                    setNombreJours("1");
+                    lineFormRef.current.nombreJours = "1";
+                    setModalYears([]);
+                    setActiveModalYear("");
+                    setShowMonthlyModal(false);
+                  }}
+                >
+                  <option value="" disabled hidden>
+                    Choisir  sous-section
                   </option>
-                ))}
-              </select>
+                  {availableCatalogueSousSections.map((x) => (
+                    <option key={x.id || x.nom_sous_section} value={x.nom_sous_section}>
+                      {x.nom_sous_section}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
             <div className="budget-block">
-              <label className="budget-label">Article</label>
-              <select value={otpId} onChange={(e) => onOtpChange(e.target.value)}>
-                {catalogueOtps.map((a) => (
-                  <option key={a.id} value={String(a.id)}>
-                    {a.designation}
-                  </option>
-                ))}
-              </select>
-
-              <div className="budget-form-2col">
-                <div>
-                  <label className="budget-label">Ute</label>
-                  <input value={unit} readOnly />
-                </div>
-                <div>
-                  <label className="budget-label">P.U</label>
+              <div className="budget-field-row budget-field-row-article">
+                <label className="budget-label">Article</label>
+                <div className="article-input-wrap" ref={articleWrapRef}>
                   <input
-                    type="number"
-                    value={pu}
-                    onChange={(e) => setPu(e.target.value)}
+                    type="text"
+                    value={articleQuery}
+                    onChange={(e) => onArticleQueryChange(e.target.value)}
+                    onClick={() => setArticlePickerOpen(true)}
+                    placeholder="Rechercher un article"
+                    style={{
+                      width: "100%",
+                      maxWidth: "100%",
+                    }}
                   />
+                  <button
+                    type="button"
+                    className="article-filter-btn"
+                    onClick={() => setArticlePickerOpen((prev) => !prev)}
+                    onMouseDown={(e) => e.preventDefault()}
+                    aria-label="Afficher les articles"
+                    title="Afficher les articles"
+                  >
+                    <svg viewBox="0 0 24 24" aria-hidden="true">
+                      <path d="M7 10l5 5 5-5" />
+                    </svg>
+                  </button>
+                  {articlePickerOpen && filteredCatalogueOtps.length > 0 && (
+                    <div className="article-picker">
+                      {filteredCatalogueOtps.map((item) => (
+                        <button
+                          key={item.id}
+                          type="button"
+                          className="article-picker-item"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => selectArticle(item)}
+                        >
+                          <span>{item.designation}</span>
+                          <small>{item.code_otp}</small>
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
               </div>
 
               <div className="budget-form-2col">
-                <div>
+                <div className="budget-field-row">
+                  <label className="budget-label">P.U</label>
+                  <input
+                    type="number"
+                    value={pu}
+                    onChange={(e) => {
+                      const nextValue = e.target.value;
+                      setPu(nextValue);
+                      lineFormRef.current.pu = nextValue;
+                    }}
+                  />
+                </div>
+                <div className="budget-field-row">
                   <label className="budget-label">Remise (%)</label>
                   <input
                     type="number"
@@ -576,7 +1143,32 @@ export default function BudgetEditor() {
                       }
                       const n = Number(v);
                       if (Number.isNaN(n)) return;
-                      setRemise(String(Math.min(100, Math.max(0, n))));
+                      const nextValue = String(Math.min(100, Math.max(0, n)));
+                      setRemise(nextValue);
+                    }}
+                  />
+                </div>
+              </div>
+
+              <div className="budget-form-2col">
+                <div className="budget-field-row budget-field-row-wide">
+                  <label className="budget-label">Nombre jours/mois</label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={30}
+                    value={nombreJours}
+                    onChange={(e) => {
+                      const nextValue = e.target.value;
+                      if (nextValue === "") {
+                        setNombreJours("");
+                        lineFormRef.current.nombreJours = "";
+                        return;
+                      }
+                      const nextNumber = Math.min(30, Math.max(1, Math.floor(Number(nextValue) || 1)));
+                      const normalized = String(nextNumber);
+                      setNombreJours(normalized);
+                      lineFormRef.current.nombreJours = normalized;
                     }}
                   />
                 </div>
@@ -595,7 +1187,7 @@ export default function BudgetEditor() {
 
               <div className="budget-add-row">
                 <div className="budget-mini-info">
-                  Quantité totale: <b>{totalQtyFromMonthly.toFixed(2)}</b>
+                  Quantité max: <b>{totalQtyFromMonthly.toFixed(2)}</b>
                   {"  "}
                   <span style={{ marginLeft: 10 }}>
                     Montant brut: <b>{currentLineGross.toFixed(2)} DH</b>
@@ -618,26 +1210,24 @@ export default function BudgetEditor() {
             <table className="table budget-table">
               <thead>
                 <tr>
-                  <th>Code OTP</th>
                   <th>sous section</th>
                   <th>Article</th>
-                  <th>Uté</th>
+                  <th>Quantité max</th>
                   <th>P.U</th>
-                  <th>Quantité Totale</th>
+                  <th>Nombre jours/mois</th>
                   <th>MontantTotal</th>
-                  <th>Détail des quantités</th>
-                  <th>Détails des montants</th>
+                  <th>Détail des montants</th>
+                  <th>Action</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredLines.map((l) => (
                   <tr key={l.id}>
-                    <td>{l.otp}</td>
                     <td>{l.subsection}</td>
                     <td>{l.article}</td>
-                    <td>{l.unit}</td>
-                    <td>{String(l.pu)}</td>
                     <td>{String(l.qty)}</td>
+                    <td>{String(l.pu)}</td>
+                    <td>{String(l.nombreJours ?? 1)}</td>
                     <td>
                       <b>{String(l.total)}</b>
                     </td>
@@ -651,19 +1241,36 @@ export default function BudgetEditor() {
                       </button>
                     </td>
                     <td>
-                      <button
-                        type="button"
-                        className="btn-sm btn-secondary"
-                        onClick={() => openMonthlyModal("view", l)}
-                      >
-                        {l.detailsAmounts}
-                      </button>
+                      <div className="line-action-group">
+                        <button
+                          type="button"
+                          className="line-action-btn line-edit-btn"
+                          onClick={() => openMonthlyModal("edit", l)}
+                          title="Modifier la ligne"
+                          aria-label="Modifier la ligne"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm14.71-9.04a1 1 0 0 0 0-1.41l-2.5-2.5a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.99-1.67z" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          className="line-action-btn line-delete-btn"
+                          onClick={() => deleteLine(l.id)}
+                          title="Supprimer la ligne"
+                          aria-label="Supprimer la ligne"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M6 6l12 12M18 6L6 18" />
+                          </svg>
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
                 {filteredLines.length === 0 && (
                   <tr>
-                    <td colSpan={9}>Aucune ligne pour ce scope/section.</td>
+                    <td colSpan={8}>Aucune ligne pour ce scope/section.</td>
                   </tr>
                 )}
               </tbody>
@@ -728,6 +1335,28 @@ export default function BudgetEditor() {
                 <h4 style={{ marginTop: 0, textAlign: "center", fontSize: 30, fontWeight: 700 }}>
                   Remplir les quantités
                 </h4>
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", marginBottom: 10 }}>
+                  {modalMode === "edit" && (
+                    <button type="button" className="btn-sm btn-secondary" onClick={removeModalYearSlot}>
+                      - Année
+                    </button>
+                  )}
+                  {modalYears.map((year) => (
+                    <button
+                      key={year}
+                      type="button"
+                      className={`btn-sm ${String(activeModalYear) === String(year) ? "" : "btn-secondary"}`}
+                      onClick={() => setActiveModalYear(String(year))}
+                    >
+                      {year}
+                    </button>
+                  ))}
+                  {modalMode === "edit" && (
+                    <button type="button" className="btn-sm btn-secondary" onClick={addModalYearSlot}>
+                      + Année
+                    </button>
+                  )}
+                </div>
                 <table className="table" style={{ background: "#fff", borderRadius: 8, overflow: "hidden" }}>
                   <tbody>
                     {[0, 1, 2].map((rowIdx) => {
@@ -750,10 +1379,17 @@ export default function BudgetEditor() {
                                     min={0}
                                     value={modalQty[m.key]}
                                     onChange={(e) =>
-                                      setMonthlyQtyDraft((prev) => ({
-                                        ...prev,
-                                        [m.key]: e.target.value,
-                                      }))
+                                      setMonthlyQtyDraftByYear((prev) => {
+                                        const next = {
+                                          ...prev,
+                                          [Number(activeModalYear)]: {
+                                            ...(prev[Number(activeModalYear)] || emptyMonthlyQty()),
+                                            [m.key]: e.target.value,
+                                          },
+                                        };
+                                        lineFormRef.current.monthlyQtyDraftByYear = next;
+                                        return next;
+                                      })
                                     }
                                     style={{ width: 72 }}
                                   />
@@ -767,7 +1403,7 @@ export default function BudgetEditor() {
                   </tbody>
                 </table>
                 <div style={{ textAlign: "center", marginTop: 8 }}>
-                  Total quantités: <b>{totalQtyInModal.toFixed(2)}</b>
+                  Quantité max: <b>{totalQtyInModal.toFixed(2)}</b>
                 </div>
               </div>
               <div
@@ -813,6 +1449,7 @@ export default function BudgetEditor() {
               </div>
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+
               <button
                 type="button"
                 className="btn-sm btn-secondary"
@@ -830,4 +1467,3 @@ export default function BudgetEditor() {
     </div>
   );
 }
-

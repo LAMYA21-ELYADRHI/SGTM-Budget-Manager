@@ -61,6 +61,16 @@ export const createProject = async (projectData) => {
   }
 };
 
+export const getNextProjectCode = async () => {
+  try {
+    const response = await axios.get(`${API_URL}/projects/next-code`);
+    return response.data?.code || "";
+  } catch (error) {
+    console.error("❌ API error:", error.response?.data || error.message);
+    throw new Error(apiErrorMessage(error));
+  }
+};
+
 export const getProjects = async () => {
   try {
     const response = await axios.get(`${API_URL}/projects`);

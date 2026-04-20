@@ -10,6 +10,156 @@ from app.schemas import budget as budget_schemas
 
 router = APIRouter(prefix="", tags=["Budget"])
 
+SECTION_ALIASES = {
+    "INSTALLATION": {"S1", "INSTALLATION"},
+    "HSE": {"S2", "HSE"},
+    "MASSE_SALARIALE": {"S3", "MASSE SALARIALE", "MASSE_SALARIALE"},
+    "MATERIEL": {"S4", "MATERIEL", "MATÉRIEL"},
+    "GASOIL": {"S5", "GASOIL"},
+    "SOUSTRAITANCE": {"S6", "SOUSTRAITANCE", "SOUS TRAITANCE"},
+    "FOURNITURES": {"FOURNITURES"},
+    "AUTRES_CHARGES": {"AUTRES_CHARGES", "AUTRE CHARGES", "AUTRES CHARGES", "AUTRES"},
+}
+
+
+def normalize_text(value):
+    return (
+        str(value or "")
+        .strip()
+        .upper()
+        .replace("É", "E")
+        .replace("È", "E")
+        .replace("Ê", "E")
+        .replace("À", "A")
+        .replace("Â", "A")
+        .replace("Î", "I")
+        .replace("Ô", "O")
+        .replace("Ù", "U")
+        .replace("Û", "U")
+        .replace("Ç", "C")
+        .replace("_", "")
+        .replace("-", "")
+        .replace(" ", "")
+    )
+
+
+def canonical_section_code(value):
+    normalized = normalize_text(value)
+    if not normalized:
+        return ""
+
+    for code, aliases in SECTION_ALIASES.items():
+        if normalized == normalize_text(code):
+            return code
+        if any(normalized == normalize_text(alias) for alias in aliases):
+            return code
+    return normalized
+
+
+def resolve_scope_section_id(db: Session, selected_section_codes):
+    catalogue_sections = db.query(budget_models.CatalogueSection).all()
+    by_code = {
+        canonical_section_code(section.nom_section): section.id for section in catalogue_sections
+    }
+    for code in selected_section_codes or []:
+        section_id = by_code.get(canonical_section_code(code))
+        if section_id:
+            return section_id
+    return None
+
+
+def parse_project_scopes(raw):
+    if not raw:
+        return []
+
+    try:
+        value = json.loads(raw)
+        if isinstance(value, list):
+            parsed = []
+            for item in value:
+                if isinstance(item, dict):
+                    name = (
+                        item.get("name")
+                        or item.get("nom")
+                        or item.get("scope")
+                        or ""
+                    )
+                    sections = item.get("sections") or []
+                else:
+                    name = str(item)
+                    sections = []
+                name = str(name).strip()
+                if not name:
+                    continue
+                parsed.append(
+                    {
+                        "name": name,
+                        "sections": [
+                            canonical_section_code(section)
+                            for section in sections
+                            if canonical_section_code(section)
+                        ],
+                    }
+                )
+            return parsed
+    except Exception:
+        pass
+
+    # fallback legacy: simple string séparée par virgule / saut de ligne / point-virgule
+    s = str(raw)
+    for sep in ["\n", ";"]:
+        s = s.replace(sep, ",")
+    return [{"name": x.strip(), "sections": []} for x in s.split(",") if x.strip()]
+
+
+def sync_scope_sections(db: Session, scope, selected_section_codes):
+    catalogue_sections = db.query(budget_models.CatalogueSection).all()
+    catalogue_by_code = {
+        canonical_section_code(section.nom_section): section for section in catalogue_sections
+    }
+
+    desired_codes = []
+    for code in selected_section_codes or []:
+        normalized = canonical_section_code(code)
+        if normalized and normalized not in desired_codes:
+            desired_codes.append(normalized)
+    if not desired_codes:
+        desired_codes = [canonical_section_code(section.nom_section) for section in catalogue_sections]
+
+    existing_sections = sorted((scope.sections or []), key=lambda section: section.id)
+    existing_by_code = {
+        canonical_section_code(section.nom): section for section in existing_sections
+    }
+    desired_lookup = {canonical_section_code(code) for code in desired_codes}
+
+    for code in desired_codes:
+        catalogue_section = catalogue_by_code.get(canonical_section_code(code))
+        if not catalogue_section:
+            continue
+
+        existing_section = existing_by_code.get(canonical_section_code(catalogue_section.nom_section))
+        if existing_section:
+            existing_section.nom = catalogue_section.nom_section
+            existing_section.catalogue_id = catalogue_section.id
+            continue
+
+        db.add(
+            budget_models.SectionBudgetaire(
+                nom=catalogue_section.nom_section,
+                catalogue_id=catalogue_section.id,
+                scope_id=scope.id,
+            )
+        )
+
+    for extra in existing_sections:
+        if canonical_section_code(extra.nom) in desired_lookup:
+            continue
+        has_data = any((ss.lignes_otp or []) for ss in (extra.sous_sections or []))
+        if not has_data:
+            db.delete(extra)
+
+    scope.section_id = resolve_scope_section_id(db, desired_codes)
+
 
 def get_db():
     db = SessionLocal()
@@ -41,35 +191,6 @@ def get_or_create_budget(project_id: int, db: Session = Depends(get_db)):
         .first()
     )
 
-    def parse_project_scopes(raw):
-        if not raw:
-            return []
-        try:
-            v = json.loads(raw)
-            if isinstance(v, list):
-                names = []
-                for item in v:
-                    if isinstance(item, dict):
-                        candidate = (
-                            item.get("name")
-                            or item.get("nom")
-                            or item.get("scope")
-                            or ""
-                        )
-                    else:
-                        candidate = str(item)
-                    candidate = str(candidate).strip()
-                    if candidate:
-                        names.append(candidate)
-                return names
-        except Exception:
-            pass
-        # fallback: string simple séparée par virgule / saut de ligne / point-virgule
-        s = str(raw)
-        for sep in ["\n", ";"]:
-            s = s.replace(sep, ",")
-        return [x.strip() for x in s.split(",") if x.strip()]
-
     wanted_scopes = parse_project_scopes(project.scope)
 
     if budget:
@@ -83,13 +204,21 @@ def get_or_create_budget(project_id: int, db: Session = Depends(get_db)):
         # 1) renommer les scopes déjà existants par index
         common_len = min(len(existing_scopes), len(wanted_scopes))
         for i in range(common_len):
-            if existing_scopes[i].nom != wanted_scopes[i]:
-                existing_scopes[i].nom = wanted_scopes[i]
+            wanted_scope = wanted_scopes[i]
+            if existing_scopes[i].nom != wanted_scope["name"]:
+                existing_scopes[i].nom = wanted_scope["name"]
                 changed = True
+            sync_scope_sections(db, existing_scopes[i], wanted_scope.get("sections", []))
+            changed = True
 
         # 2) ajouter les nouveaux scopes
-        for name in wanted_scopes[common_len:]:
-            db.add(budget_models.Scope(nom=name, budget_id=budget.id))
+        for scope_data in wanted_scopes[common_len:]:
+            new_scope = budget_models.Scope(
+                nom=scope_data["name"],
+                budget_id=budget.id,
+                section_id=resolve_scope_section_id(db, scope_data.get("sections", [])),
+            )
+            db.add(new_scope)
             changed = True
 
         # 3) supprimer les scopes excédentaires seulement s'ils n'ont pas de données
@@ -101,6 +230,25 @@ def get_or_create_budget(project_id: int, db: Session = Depends(get_db)):
 
         if changed:
             db.commit()
+
+        # Resynchronisation des sections après commit pour les scopes nouvellement ajoutés
+        refreshed_budget = (
+            db.query(budget_models.Budget)
+            .options(
+                joinedload(budget_models.Budget.scopes)
+                .joinedload(budget_models.Scope.sections)
+                .joinedload(budget_models.SectionBudgetaire.sous_sections)
+                .joinedload(budget_models.SousSection.lignes_otp)
+                .joinedload(budget_models.LigneOTP.details_mensuels)
+            )
+            .filter(budget_models.Budget.id == budget.id)
+            .first()
+        )
+        if refreshed_budget:
+            refreshed_scopes = sorted((refreshed_budget.scopes or []), key=lambda s: s.id)
+        for scope, wanted_scope in zip(refreshed_scopes, wanted_scopes):
+            sync_scope_sections(db, scope, wanted_scope.get("sections", []))
+        db.commit()
 
         return (
             db.query(budget_models.Budget)
@@ -121,11 +269,31 @@ def get_or_create_budget(project_id: int, db: Session = Depends(get_db)):
     db.refresh(budget)
 
     # créer automatiquement les scopes du budget à partir du projet
-    for name in wanted_scopes:
-        db.add(budget_models.Scope(nom=name, budget_id=budget.id))
+    for scope_data in wanted_scopes:
+        db.add(
+            budget_models.Scope(
+                nom=scope_data["name"],
+                budget_id=budget.id,
+                section_id=resolve_scope_section_id(db, scope_data.get("sections", [])),
+            )
+        )
     if wanted_scopes:
         db.commit()
-        db.refresh(budget)
+        budget = (
+            db.query(budget_models.Budget)
+            .options(
+                joinedload(budget_models.Budget.scopes)
+                .joinedload(budget_models.Scope.sections)
+                .joinedload(budget_models.SectionBudgetaire.sous_sections)
+                .joinedload(budget_models.SousSection.lignes_otp)
+                .joinedload(budget_models.LigneOTP.details_mensuels)
+            )
+            .filter(budget_models.Budget.id == budget.id)
+            .first()
+        )
+        for scope, wanted_scope in zip(budget.scopes or [], wanted_scopes):
+            sync_scope_sections(db, scope, wanted_scope.get("sections", []))
+        db.commit()
     return budget
 
 
@@ -144,7 +312,11 @@ def create_scope(budget_id: int, payload: budget_schemas.ScopeBase, db: Session 
     budget = db.query(budget_models.Budget).filter(budget_models.Budget.id == budget_id).first()
     if not budget:
         raise HTTPException(status_code=404, detail="Budget not found")
-    scope = budget_models.Scope(nom=payload.nom, budget_id=budget_id)
+    scope = budget_models.Scope(
+        nom=payload.nom,
+        budget_id=budget_id,
+        section_id=payload.section_id,
+    )
     db.add(scope)
     db.commit()
     db.refresh(scope)
@@ -365,6 +537,7 @@ def create_ligne_otp(
         code_otp=payload.code_otp,
         designation=payload.designation,
         unite=payload.unite,
+        nombre_jours=payload.nombre_jours,
         quantite_globale=payload.quantite_globale,
         prix_unitaire=payload.prix_unitaire,
         montant_total=payload.montant_total,
@@ -407,6 +580,7 @@ def update_ligne_otp(ligne_id: int, payload: budget_schemas.LigneOTPCreate, db: 
     line.code_otp = payload.code_otp
     line.designation = payload.designation
     line.unite = payload.unite
+    line.nombre_jours = payload.nombre_jours
     line.quantite_globale = payload.quantite_globale
     line.prix_unitaire = payload.prix_unitaire
     line.montant_total = payload.montant_total

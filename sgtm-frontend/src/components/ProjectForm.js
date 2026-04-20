@@ -1,13 +1,41 @@
 import React, { useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { createProject, getProject, updateProject } from "../api/api";
+import {
+  createProject,
+  getNextProjectCode,
+  getProject,
+  updateProject,
+} from "../api/api";
+import {
+  normalizeSectionCode,
+  SECTION_OPTIONS,
+} from "../constants/sections";
 import "../styles.css";
+const PROJECT_TYPE_OPTIONS = [
+  "Ferrovaire",
+  "Transfert d'eau",
+  "Industriel",
+  "Barrage",
+  "Dessalement",
+];
 
-const SECTION_OPTIONS = ["S1", "S2", "S3", "S4", "S5", "S6"];
+const toDateValue = (value) => {
+  if (!value) return null;
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+
+const isDateInRange = (dateValue, startValue, endValue) => {
+  const date = toDateValue(dateValue);
+  const start = toDateValue(startValue);
+  const end = toDateValue(endValue);
+  if (!date || !start || !end) return false;
+  return date >= start && date <= end;
+};
 
 const buildScope = (slot, seed = {}) => {
   const sections = Array.isArray(seed.sections)
-    ? seed.sections.filter((s) => SECTION_OPTIONS.includes(s))
+    ? seed.sections.map(normalizeSectionCode).filter(Boolean)
     : [];
   const dateDebut = seed.date_debut || seed.start_date || "";
   const dateFin = seed.date_fin || seed.end_date || "";
@@ -48,6 +76,21 @@ const ProjectForm = () => {
   });
 
   useEffect(() => {
+    if (projectId) return;
+    (async () => {
+      try {
+        const nextCode = await getNextProjectCode();
+        setFormData((prev) => ({
+          ...prev,
+          code: prev.code || nextCode,
+        }));
+      } catch (e) {
+        console.error(e?.message || "Erreur API");
+      }
+    })();
+  }, [projectId]);
+
+  useEffect(() => {
     if (!projectId) return;
     (async () => {
       try {
@@ -68,7 +111,10 @@ const ProjectForm = () => {
           scope_end_date: p.scope_end_date || "",
           sections:
             typeof p.sections === "string" && p.sections
-              ? p.sections.split(",").map((s) => s.trim()).filter(Boolean)
+              ? p.sections
+                  .split(",")
+                  .map((s) => normalizeSectionCode(s.trim()))
+                  .filter(Boolean)
               : prev.sections,
         }));
 
@@ -162,6 +208,15 @@ const ProjectForm = () => {
       return;
     }
 
+    if (formData.start_date && formData.end_date) {
+      const projectStart = toDateValue(formData.start_date);
+      const projectEnd = toDateValue(formData.end_date);
+      if (!projectStart || !projectEnd || projectStart > projectEnd) {
+        alert("La date de début du projet doit être antérieure ou égale à la date de fin.");
+        return;
+      }
+    }
+
     if (groupement === "oui") {
       const cleaned = groupementNames.map((s) => s.trim()).filter(Boolean);
       if (cleaned.length === 0) {
@@ -198,6 +253,28 @@ const ProjectForm = () => {
         alert("Chaque scope doit avoir une date de début et de fin.");
         return;
       }
+      if (
+        cleanedScopes.some((scope) => {
+          const start = toDateValue(scope.date_debut);
+          const end = toDateValue(scope.date_fin);
+          return !start || !end || start > end;
+        })
+      ) {
+        alert("Chaque scope doit avoir une date de début antérieure ou égale à sa date de fin.");
+        return;
+      }
+      if (
+        formData.start_date &&
+        formData.end_date &&
+        cleanedScopes.some(
+          (scope) =>
+            !isDateInRange(scope.date_debut, formData.start_date, formData.end_date) ||
+            !isDateInRange(scope.date_fin, formData.start_date, formData.end_date)
+        )
+      ) {
+        alert("Les dates des scopes doivent être incluses dans la durée du projet.");
+        return;
+      }
 
       const payload = {
         ...formData,
@@ -231,22 +308,32 @@ const ProjectForm = () => {
           <div className="column">
             <div className="form-group">
               <label>Code projet *</label>
-              <input name="code" onChange={handleChange} />
+              <input
+                name="code"
+                value={formData.code}
+                onChange={handleChange}
+                readOnly={!projectId}
+              />
             </div>
 
             <div className="form-group">
               <label>Client *</label>
-              <input name="client" onChange={handleChange} />
+              <input name="client" value={formData.client} onChange={handleChange} />
             </div>
 
             <div className="form-group">
               <label>Localisation</label>
-              <input name="location" onChange={handleChange} />
+              <input name="location" value={formData.location} onChange={handleChange} />
             </div>
 
             <div className="form-group">
               <label>Date début *</label>
-              <input type="date" name="start_date" onChange={handleChange} />
+              <input
+                type="date"
+                name="start_date"
+                value={formData.start_date}
+                onChange={handleChange}
+              />
             </div>
 
             {/* GROUPEMENT */}
@@ -323,16 +410,7 @@ const ProjectForm = () => {
               <label>Scopes *</label>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {scopesList.map((scope, idx) => (
-                  <div
-                    key={`scope-left-${idx}`}
-                    style={{
-                      border: "1px solid #c8d2e6",
-                      borderRadius: 10,
-                      padding: 10,
-                      background: "#f6f8fc",
-                      maxWidth: 340,
-                    }}
-                  >
+                  <div key={`scope-left-${idx}`} className="scope-card">
                     <div className="inline-row" style={{ marginBottom: 8 }}>
                       <input
                         type="text"
@@ -359,18 +437,18 @@ const ProjectForm = () => {
                     <div
                       style={{
                         display: "grid",
-                        gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                        gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
                         gap: 6,
                       }}
                     >
                       {SECTION_OPTIONS.map((section) => (
                         <label
-                          key={`${idx}-${section}`}
+                          key={`${idx}-${section.code}`}
                           style={{
                             fontSize: 12,
-                            display: "inline-flex",
+                            display: "flex",
                             alignItems: "center",
-                            gap: 0,
+                            gap: 6,
                             letterSpacing: "-0.1px",
                             padding: 0,
                             margin: 0,
@@ -379,8 +457,8 @@ const ProjectForm = () => {
                         >
                           <input
                             type="checkbox"
-                            checked={scope.sections.includes(section)}
-                            onChange={() => toggleScopeSection(idx, section)}
+                            checked={scope.sections.includes(section.code)}
+                            onChange={() => toggleScopeSection(idx, section.code)}
                             style={{
                               margin: 0,
                               padding: 0,
@@ -390,8 +468,8 @@ const ProjectForm = () => {
                               verticalAlign: "middle",
                             }}
                           />
-                          <span style={{ margin: 0, marginLeft: -1, padding: 0, lineHeight: 1 }}>
-                            {section}
+                          <span style={{ margin: 0, padding: 0, lineHeight: 1 }}>
+                            {section.label}
                           </span>
                         </label>
                       ))}
@@ -406,31 +484,46 @@ const ProjectForm = () => {
           <div className="column">
             <div className="form-group">
               <label>Nom du projet *</label>
-              <input name="name" onChange={handleChange} />
+              <input name="name" value={formData.name} onChange={handleChange} />
             </div>
 
             <div className="form-group">
               <label>Pole *</label>
-              <input name="pole" onChange={handleChange} />
+              <input name="pole" value={formData.pole} onChange={handleChange} />
             </div>
 
             <div className="form-group">
               <label>Directeur du projet *</label>
-              <input name="project_manager" onChange={handleChange} />
+              <input
+                name="project_manager"
+                value={formData.project_manager}
+                onChange={handleChange}
+              />
             </div>
 
             <div className="form-group">
               <label>Date fin *</label>
-              <input type="date" name="end_date" onChange={handleChange} />
+              <input
+                type="date"
+                name="end_date"
+                value={formData.end_date}
+                onChange={handleChange}
+              />
             </div>
 
             <div className="form-group">
               <label>Type de projet *</label>
-              <select name="project_type" onChange={handleChange}>
+              <select
+                name="project_type"
+                value={formData.project_type}
+                onChange={handleChange}
+              >
                 <option value="">Choisir</option>
-                <option>Barrage</option>
-                <option>Route</option>
-                <option>Bâtiment</option>
+                {PROJECT_TYPE_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
               </select>
             </div>
 

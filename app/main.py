@@ -6,6 +6,8 @@ from app.routes.project import router as project_router
 from app.routes.budget import router as budget_router
 from sqlalchemy import text
 from app.models import budget  # important pour créer tables
+from app.models.budget import CatalogueSection, Scope
+from sqlalchemy.orm import Session
 
 app = FastAPI()
 
@@ -35,6 +37,57 @@ with engine.begin() as conn:
         conn.execute(text("ALTER TABLE projects ADD COLUMN scope_start_date DATE NULL"))
     if "scope_end_date" not in col_names:
         conn.execute(text("ALTER TABLE projects ADD COLUMN scope_end_date DATE NULL"))
+    scope_cols = conn.execute(text("PRAGMA table_info(scopes)")).fetchall()
+    scope_col_names = {row[1] for row in scope_cols}
+    if "section_id" not in scope_col_names:
+        conn.execute(text("ALTER TABLE scopes ADD COLUMN section_id INTEGER NULL"))
+    ligne_cols = conn.execute(text("PRAGMA table_info(lignes_otp)")).fetchall()
+    ligne_col_names = {row[1] for row in ligne_cols}
+    if "nombre_jours" not in ligne_col_names:
+        conn.execute(
+            text("ALTER TABLE lignes_otp ADD COLUMN nombre_jours INTEGER NOT NULL DEFAULT 1")
+        )
+
+
+def seed_default_catalogue_sections():
+    default_sections = [
+        "INSTALLATION",
+        "HSE",
+        "MASSE SALARIALE",
+        "MATERIEL",
+        "GASOIL",
+        "SOUSTRAITANCE",
+        "FOURNITURES",
+        "AUTRES CHARGES",
+    ]
+    db = Session(engine)
+    try:
+        existing = {row[0] for row in db.query(CatalogueSection.nom_section).all()}
+        changed = False
+        for name in default_sections:
+            if name not in existing:
+                db.add(CatalogueSection(nom_section=name))
+                changed = True
+        if changed:
+            db.commit()
+
+        sections_by_id = {
+            section.id: section.nom_section for section in db.query(CatalogueSection).all()
+        }
+        for scope in db.query(Scope).all():
+            if scope.section_id:
+                continue
+            first_section = None
+            if scope.sections:
+                first_section = scope.sections[0]
+            if first_section and first_section.catalogue_id in sections_by_id:
+                scope.section_id = first_section.catalogue_id
+        db.commit()
+    finally:
+        db.close()
+
+
+seed_default_catalogue_sections()
 
 #  routes
 app.include_router(project_router)

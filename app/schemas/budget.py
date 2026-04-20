@@ -30,6 +30,7 @@ class LigneOTPBase(BaseModel):
     code_otp: str
     designation: str
     unite: str
+    nombre_jours: int = 1
     quantite_globale: float
     prix_unitaire: float
     montant_total: float
@@ -93,6 +94,7 @@ class SectionBudgetaireResponse(SectionBudgetaireBase):
 class ScopeBase(BaseModel):
     nom: str
     total_scope: float = 0.0
+    section_id: Optional[int] = None
 
 
 class ScopeCreate(ScopeBase):

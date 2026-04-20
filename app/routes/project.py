@@ -6,6 +6,25 @@ from app.schemas.project import ProjectCreate, ProjectResponse
 
 router = APIRouter()
 
+PROJECT_CODE_PREFIX = "PRJ-"
+
+
+def build_next_project_code(db: Session) -> str:
+    codes = [row[0] for row in db.query(Project.code).filter(Project.code.isnot(None)).all()]
+    max_number = 0
+
+    for code in codes:
+        if not code:
+            continue
+        raw = str(code).strip().upper()
+        if raw.startswith(PROJECT_CODE_PREFIX):
+            raw = raw[len(PROJECT_CODE_PREFIX):]
+        digits = "".join(ch for ch in raw if ch.isdigit())
+        if digits:
+            max_number = max(max_number, int(digits))
+
+    return f"{PROJECT_CODE_PREFIX}{max_number + 1:04d}"
+
 # DB session
 def get_db():
     db = SessionLocal()
@@ -15,9 +34,16 @@ def get_db():
         db.close()
 
 # CREATE
+@router.get("/projects/next-code")
+def get_next_project_code(db: Session = Depends(get_db)):
+    return {"code": build_next_project_code(db)}
+
+
 @router.post("/projects", response_model=ProjectResponse)
 def create_project(project: ProjectCreate, db: Session = Depends(get_db)):
-    new_project = Project(**project.dict())
+    payload = project.dict()
+    payload["code"] = (payload.get("code") or "").strip() or build_next_project_code(db)
+    new_project = Project(**payload)
     db.add(new_project)
     db.commit()
     db.refresh(new_project)
@@ -44,7 +70,11 @@ def update_project(project_id: int, updated_project: ProjectCreate, db: Session 
     if not project:
         raise HTTPException(status_code=404, detail="Project not found")
 
-    for key, value in updated_project.dict().items():
+    payload = updated_project.dict()
+    if not str(payload.get("code") or "").strip():
+        payload["code"] = project.code
+
+    for key, value in payload.items():
         setattr(project, key, value)
 
     db.commit()

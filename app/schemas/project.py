@@ -3,7 +3,7 @@ from datetime import date
 from typing import Optional
 
 class ProjectCreate(BaseModel):
-    code: str
+    code: str = ""
     name: str
     client: str
     pole: str

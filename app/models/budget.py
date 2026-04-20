@@ -34,7 +34,9 @@ class Scope(Base):
     
     budget_id = Column(Integer, ForeignKey("budgets.id"))
     budget = relationship("Budget", back_populates="scopes")
-    
+    section_id = Column(Integer, ForeignKey("catalogue_sections.id"), nullable=True)
+    section = relationship("CatalogueSection", back_populates="scopes")
+
     sections = relationship("SectionBudgetaire", back_populates="scope", cascade="all, delete-orphan")
 
 
@@ -76,6 +78,7 @@ class LigneOTP(Base):
     code_otp = Column(String, index=True)
     designation = Column(String)
     unite = Column(String)
+    nombre_jours = Column(Integer, default=1)
     quantite_globale = Column(Float, default=0.0)
     prix_unitaire = Column(Float, default=0.0)
     montant_total = Column(Float, default=0.0)
@@ -106,7 +109,8 @@ class CatalogueSection(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     nom_section = Column(String, unique=True)
-    
+    scopes = relationship("Scope", back_populates="section")
+
     sous_sections = relationship("CatalogueSousSection", back_populates="section", cascade="all, delete-orphan")
 
 
