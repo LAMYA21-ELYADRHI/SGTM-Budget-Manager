@@ -11,6 +11,7 @@ import {
   getOrCreateBudget,
   getProject,
   deleteLigneOtp,
+  duplicateLigneOtp,
   updateLigneOtp,
   recalculateBudget,
   validateBudget,
@@ -189,7 +190,7 @@ export default function BudgetEditor() {
   const [modalYears, setModalYears] = useState([]);
   const [activeModalYear, setActiveModalYear] = useState("");
   const [showMonthlyModal, setShowMonthlyModal] = useState(false);
-  const [modalMode, setModalMode] = useState("edit");
+  const [modalMode, setModalMode] = useState("create");
   const [editingLineId, setEditingLineId] = useState(null);
   const lineFormRef = useRef({
     subsection: "",
@@ -449,6 +450,40 @@ export default function BudgetEditor() {
     return out;
   }, [activeScope, activeSection]);
 
+  const duplicateRow = async (lineId) => {
+    try {
+      await duplicateLigneOtp(lineId);
+      await refreshBudget();
+    } catch (e) {
+      alert(e?.message || "Erreur API ❌");
+    }
+  };
+
+  const applyLineToForm = (line) => {
+    if (!line) return;
+    setSubsection(line.subsection || "");
+    lineFormRef.current.subsection = line.subsection || "";
+    setArticle(line.article || "");
+    lineFormRef.current.article = line.article || "";
+    setArticleQuery(line.article || "");
+    lineFormRef.current.articleQuery = line.article || "";
+    const matchedOtp = availableCatalogueOtps.find((item) => {
+      const matchDesignation = normalize(item.designation) === normalize(line.article);
+      const matchCode = normalize(item.code_otp) === normalize(line.otp);
+      return matchDesignation || matchCode;
+    });
+    const nextOtpId = matchedOtp ? String(matchedOtp.id) : "";
+    setOtpId(nextOtpId);
+    lineFormRef.current.otpId = nextOtpId;
+    setUnit(line.unit || "Jour/Mois");
+    lineFormRef.current.unit = line.unit || "Jour/Mois";
+    setNombreJours(String(line.nombreJours ?? line.nombre_jours ?? 1));
+    lineFormRef.current.nombreJours = String(line.nombreJours ?? line.nombre_jours ?? 1);
+    setPu(line.pu != null ? String(line.pu) : "");
+    lineFormRef.current.pu = line.pu != null ? String(line.pu) : "";
+    setRemise("");
+  };
+
   const currentLineGross = useMemo(() => {
     const p = Number(pu || 0);
     const d = Math.min(30, Math.max(1, Number(nombreJours || 1)));
@@ -588,7 +623,7 @@ export default function BudgetEditor() {
         ? String(found.prix_unitaire_reference)
         : ""
     );
-  }, [otpId, availableCatalogueOtps, editingLineId, modalMode, showMonthlyModal]);
+  }, [otpId, availableCatalogueOtps]);
 
   const onArticleQueryChange = (value) => {
     setArticleQuery(value);
@@ -830,9 +865,9 @@ export default function BudgetEditor() {
     }
   };
 
-  const openMonthlyModal = (mode = "edit", line = null) => {
+  const openMonthlyModal = (mode = "create", line = null) => {
     setModalMode(mode);
-    setEditingLineId(line?.id || null);
+    setEditingLineId(mode === "edit" ? line?.id || null : null);
     const yearsFromLine = line
       ? Object.keys(detailsToYearState(line.detailsMensuels || {})).map(Number)
       : [];
@@ -847,26 +882,7 @@ export default function BudgetEditor() {
       setMonthlyQtyDraftByYear(nextDraft);
       lineFormRef.current.monthlyQtyDraftByYear = nextDraft;
       lineFormRef.current.monthlyQtyByYear = {};
-      setSubsection(line.subsection || "");
-      lineFormRef.current.subsection = line.subsection || "";
-      setArticle(line.article || "");
-      lineFormRef.current.article = line.article || "";
-      setArticleQuery(line.article || "");
-      lineFormRef.current.articleQuery = line.article || "";
-      const matchedOtp = availableCatalogueOtps.find((item) => {
-        const matchDesignation = normalize(item.designation) === normalize(line.article);
-        const matchCode = normalize(item.code_otp) === normalize(line.otp);
-        return matchDesignation || matchCode;
-      });
-      setOtpId(matchedOtp ? String(matchedOtp.id) : "");
-      lineFormRef.current.otpId = matchedOtp ? String(matchedOtp.id) : "";
-      setUnit(line.unit || "Jour/Mois");
-      lineFormRef.current.unit = line.unit || "Jour/Mois";
-      setNombreJours(String(line.nombreJours ?? line.nombre_jours ?? 1));
-      lineFormRef.current.nombreJours = String(line.nombreJours ?? line.nombre_jours ?? 1);
-      setPu(line.pu != null ? String(line.pu) : "");
-      lineFormRef.current.pu = line.pu != null ? String(line.pu) : "";
-      setRemise("");
+      applyLineToForm(line);
     } else {
       const draft = {};
       for (const year of initialYears) {
@@ -898,13 +914,19 @@ export default function BudgetEditor() {
   const grossInModal = monthlyAmountsInModal.reduce((sum, m) => sum + m.amount, 0);
   const discountInModal = grossInModal * (Math.min(100, Math.max(0, Number(remise || 0))) / 100);
   const netInModal = Math.max(0, grossInModal - discountInModal);
+  const modalTitle =
+    modalMode === "view"
+      ? "Consulter les quantités"
+      : modalMode === "edit"
+      ? "Modifier la ligne"
+      : "Remplir les quantités";
 
   const onConfirmMonthlyModal = async () => {
     if (modalMode === "edit" && editingLineId) {
       await addLine(monthlyQtyDraftByYear);
       return;
     }
-    if (modalMode === "edit") {
+    if (modalMode === "edit" || modalMode === "create") {
       const nextQty = { ...monthlyQtyDraftByYear };
       lineFormRef.current.monthlyQtyByYear = nextQty;
       lineFormRef.current.monthlyQtyDraftByYear = nextQty;
@@ -1058,7 +1080,7 @@ export default function BudgetEditor() {
                   }}
                 >
                   <option value="" disabled hidden>
-                    Choisir  sous-section
+                    Choisir sous-section
                   </option>
                   {availableCatalogueSousSections.map((x) => (
                     <option key={x.id || x.nom_sous_section} value={x.nom_sous_section}>
@@ -1176,14 +1198,10 @@ export default function BudgetEditor() {
 
               <div>
                 <label className="budget-label">Détail des quantités / montants</label>
-                <button
-                  type="button"
-                  className="btn-sm btn-secondary"
-                  onClick={() => openMonthlyModal("edit")}
-                >
-                  Remplir les détails
-                </button>
-              </div>
+                  <button type="button" className="btn-sm btn-secondary" onClick={() => openMonthlyModal("create")}>
+                    Remplir les détails
+                  </button>
+                </div>
 
               <div className="budget-add-row">
                 <div className="budget-mini-info">
@@ -1251,6 +1269,18 @@ export default function BudgetEditor() {
                         >
                           <svg viewBox="0 0 24 24" aria-hidden="true">
                             <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm14.71-9.04a1 1 0 0 0 0-1.41l-2.5-2.5a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.99-1.67z" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          className="line-action-btn line-duplicate-btn"
+                          onClick={() => duplicateRow(l.id)}
+                          title="Dupliquer la ligne"
+                          aria-label="Dupliquer la ligne"
+                        >
+                          <svg viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M9 9h10v10H9z" />
+                            <path d="M5 5h10v10H5z" />
                           </svg>
                         </button>
                         <button
@@ -1333,10 +1363,10 @@ export default function BudgetEditor() {
                 }}
               >
                 <h4 style={{ marginTop: 0, textAlign: "center", fontSize: 30, fontWeight: 700 }}>
-                  Remplir les quantités
+                  {modalTitle}
                 </h4>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", marginBottom: 10 }}>
-                  {modalMode === "edit" && (
+                  {modalMode !== "view" && (
                     <button type="button" className="btn-sm btn-secondary" onClick={removeModalYearSlot}>
                       - Année
                     </button>
@@ -1351,7 +1381,7 @@ export default function BudgetEditor() {
                       {year}
                     </button>
                   ))}
-                  {modalMode === "edit" && (
+                  {modalMode !== "view" && (
                     <button type="button" className="btn-sm btn-secondary" onClick={addModalYearSlot}>
                       + Année
                     </button>

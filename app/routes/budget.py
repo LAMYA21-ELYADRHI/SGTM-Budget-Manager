@@ -606,6 +606,50 @@ def update_ligne_otp(ligne_id: int, payload: budget_schemas.LigneOTPCreate, db: 
     return line
 
 
+@router.post("/lignes-otp/{ligne_id}/duplicate", response_model=budget_schemas.LigneOTPResponse)
+def duplicate_ligne_otp(ligne_id: int, db: Session = Depends(get_db)):
+    source = (
+        db.query(budget_models.LigneOTP)
+        .options(joinedload(budget_models.LigneOTP.details_mensuels))
+        .filter(budget_models.LigneOTP.id == ligne_id)
+        .first()
+    )
+    if not source:
+        raise HTTPException(status_code=404, detail="Ligne OTP not found")
+
+    new_line = budget_models.LigneOTP(
+        code_otp=source.code_otp,
+        designation=source.designation,
+        unite=source.unite,
+        nombre_jours=source.nombre_jours,
+        quantite_globale=source.quantite_globale,
+        prix_unitaire=source.prix_unitaire,
+        montant_total=source.montant_total,
+        sous_section_id=source.sous_section_id,
+    )
+    db.add(new_line)
+    db.flush()
+
+    for detail in source.details_mensuels or []:
+        db.add(
+            budget_models.DetailMensuel(
+                mois=detail.mois,
+                annee=detail.annee,
+                quantite=detail.quantite,
+                ligne_otp_id=new_line.id,
+            )
+        )
+
+    db.commit()
+    new_line = (
+        db.query(budget_models.LigneOTP)
+        .options(joinedload(budget_models.LigneOTP.details_mensuels))
+        .filter(budget_models.LigneOTP.id == new_line.id)
+        .first()
+    )
+    return new_line
+
+
 @router.delete("/lignes-otp/{ligne_id}")
 def delete_ligne_otp(ligne_id: int, db: Session = Depends(get_db)):
     line = db.query(budget_models.LigneOTP).filter(budget_models.LigneOTP.id == ligne_id).first()

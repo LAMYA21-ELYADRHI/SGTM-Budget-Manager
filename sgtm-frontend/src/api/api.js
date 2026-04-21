@@ -265,6 +265,16 @@ export const updateLigneOtp = async (ligneId, ligne) => {
   }
 };
 
+export const duplicateLigneOtp = async (ligneId) => {
+  try {
+    const response = await axios.post(`${API_URL}/lignes-otp/${ligneId}/duplicate`);
+    return response.data;
+  } catch (error) {
+    console.error("âŒ API error:", error.response?.data || error.message);
+    throw new Error(apiErrorMessage(error));
+  }
+};
+
 export const deleteLigneOtp = async (ligneId) => {
   try {
     const response = await axios.delete(`${API_URL}/lignes-otp/${ligneId}`);

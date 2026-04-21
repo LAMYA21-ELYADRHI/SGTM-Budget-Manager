@@ -625,6 +625,17 @@ button:hover {
   box-shadow: 0 8px 18px rgba(37, 99, 235, 0.24);
 }
 
+.line-duplicate-btn {
+  background: linear-gradient(180deg, #22c55e, #16a34a);
+  border: 1px solid #15803d;
+  box-shadow: 0 6px 14px rgba(22, 163, 74, 0.2);
+}
+
+.line-duplicate-btn:hover {
+  background: linear-gradient(180deg, #4ade80, #22c55e);
+  box-shadow: 0 8px 18px rgba(22, 163, 74, 0.28);
+}
+
 .line-action-group {
   display: inline-flex;
   gap: 6px;
