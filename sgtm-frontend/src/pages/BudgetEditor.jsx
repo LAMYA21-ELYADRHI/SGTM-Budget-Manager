@@ -2,6 +2,29 @@ import React, { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 import "../styles.css";
 import {
+  FiBriefcase,
+  FiCalendar,
+  FiChevronDown,
+  FiCopy,
+  FiDollarSign,
+  FiDroplet,
+  FiEdit,
+  FiEye,
+  FiFile,
+  FiGrid,
+  FiHash,
+  FiHome,
+  FiLayers,
+  FiPercent,
+  FiShield,
+  FiTable,
+  FiTool,
+  FiTrash,
+  FiTrendingUp,
+  FiUsers,
+  FiBox,
+} from "react-icons/fi";
+import {
   assignSectionsToScope,
   createLigneOtp,
   createSousSection,
@@ -61,13 +84,7 @@ const yearStateToDetails = (yearState = {}) =>
     }))
   );
 
-const sumYearState = (yearState = {}) =>
-  Object.values(yearState).reduce(
-    (sum, months) =>
-      sum +
-      MONTHS.reduce((monthSum, month) => monthSum + Number(months?.[month.key] || 0), 0),
-    0
-  );
+const maxQtyFromDetails = (details = []) => maxYearState(detailsToYearState(details));
 
 const maxYearState = (yearState = {}) =>
   Object.values(yearState).reduce((max, months) => {
@@ -129,6 +146,19 @@ const MATERIAL_SUBSECTION_MAP = {
   AUTRE: "Autre",
 };
 
+const SECTION_TAB_ICONS = {
+  INSTALLATION: FiHome,
+  HSE: FiShield,
+  MASSE_SALARIALE: FiUsers,
+  MATERIEL: FiTool,
+  GASOIL: FiDroplet,
+  SOUSTRAITANCE: FiBriefcase,
+  FOURNITURES: FiBox,
+  AUTRES_CHARGES: FiLayers,
+};
+
+const TABLE_COLUMN_WIDTHS = ["18%", "24%", "10%", "10%", "12%", "12%", "14%", "10%"];
+
 const parseUnitPrice = (value) => {
   const parsed = Number(String(value || "").replace(",", ".").trim());
   return Number.isFinite(parsed) ? parsed : 0;
@@ -138,6 +168,12 @@ const parseFlexibleNumber = (value) => {
   const parsed = Number(String(value || "").replace(",", ".").trim());
   return Number.isFinite(parsed) ? parsed : NaN;
 };
+
+const formatAmount = (value) =>
+  new Intl.NumberFormat("fr-FR", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(Number(value || 0));
 
 const parseMaterialCatalogueCsv = (csvText) =>
   String(csvText || "")
@@ -310,15 +346,17 @@ export default function BudgetEditor() {
 
   // Quand on change de scope (ou d'onglet), on vide les champs de saisie
   useEffect(() => {
-    setRemise("");
-    setShowMonthlyModal(false);
-    setArticleQuery("");
-    setArticlePickerOpen(false);
-    setNombreJours("1");
+    if (showMonthlyModal) return;
+    // Ne réinitialiser que si aucun formulaire n'est en cours de saisie
+    if (!articleQuery && !subsection && !pu) {
+      setRemise("");
+      setShowMonthlyModal(false);
+      setArticlePickerOpen(false);
+    }
 
     // remettre PU/unité/designation sur la référence catalogue (si OTP sélectionné)
     const found = availableCatalogueOtps.find((o) => String(o.id) === String(otpId));
-    if (found) {
+    if (found && !articleQuery) {
       setArticle(found.designation || "");
       setUnit("Jour/Mois");
       setPu(
@@ -439,7 +477,7 @@ export default function BudgetEditor() {
           unit: line.unite,
           nombreJours: line.nombre_jours ?? 1,
           pu: line.prix_unitaire,
-          qty: line.quantite_globale,
+          qty: maxQtyFromDetails(line.details_mensuels || []) || Number(line.quantite_globale || 0),
           total: line.montant_total,
           detailsQty: "consulter le détail",
           detailsAmounts: "consulter le détail",
@@ -508,9 +546,8 @@ export default function BudgetEditor() {
 
   const totalSection = useMemo(() => {
     if (!activeScope) return 0;
-    const section = findSectionInScope(activeScope, activeSection);
-    return Number(section?.total_section || 0);
-  }, [activeScope, activeSection]);
+    return scopes.reduce((sum, scope) => sum + Number(scope?.total_scope || 0), 0);
+  }, [activeScope, scopes]);
 
   const activeScopeIndex = useMemo(() => {
     if (!activeScopeId) return -1;
@@ -615,14 +652,31 @@ export default function BudgetEditor() {
       return;
     }
 
-    setArticle(found.designation || "");
-    setArticleQuery(found.designation || "");
-    setUnit("Jour/Mois");
-    setPu(
-      found.prix_unitaire_reference != null
-        ? String(found.prix_unitaire_reference)
-        : ""
-    );
+    const snapshot = lineFormRef.current || {};
+    // Ne pas écraser la saisie utilisateur: compléter uniquement les champs vides.
+    if (!snapshot.article) {
+      setArticle(found.designation || "");
+      lineFormRef.current.article = found.designation || "";
+    }
+    if (!snapshot.articleQuery) {
+      setArticleQuery(found.designation || "");
+      lineFormRef.current.articleQuery = found.designation || "";
+    }
+    if (!snapshot.unit) {
+      setUnit("Jour/Mois");
+      lineFormRef.current.unit = "Jour/Mois";
+    }
+    if (!snapshot.pu) {
+      setPu(
+        found.prix_unitaire_reference != null
+          ? String(found.prix_unitaire_reference)
+          : ""
+      );
+      lineFormRef.current.pu =
+        found.prix_unitaire_reference != null
+          ? String(found.prix_unitaire_reference)
+          : "";
+    }
   }, [otpId, availableCatalogueOtps]);
 
   const onArticleQueryChange = (value) => {
@@ -639,48 +693,43 @@ export default function BudgetEditor() {
 
     if (exact) {
       const nextOtpId = String(exact.id);
-      const selectionChanged = String(otpId || "") !== nextOtpId;
       setOtpId(nextOtpId);
       lineFormRef.current.otpId = nextOtpId;
-      setArticle(exact.designation || "");
-      lineFormRef.current.article = exact.designation || "";
-      setUnit("Jour/Mois");
-      lineFormRef.current.unit = "Jour/Mois";
-      setPu(
-        exact.prix_unitaire_reference != null
-          ? String(exact.prix_unitaire_reference)
-          : ""
-      );
-      lineFormRef.current.pu =
-        exact.prix_unitaire_reference != null
-          ? String(exact.prix_unitaire_reference)
-          : "";
-      if (selectionChanged) {
-        setMonthlyQtyByYear({});
-        setMonthlyQtyDraftByYear({});
-        lineFormRef.current.monthlyQtyByYear = {};
-        lineFormRef.current.monthlyQtyDraftByYear = {};
-        setNombreJours("1");
-        lineFormRef.current.nombreJours = "1";
-        setModalYears([]);
-        setActiveModalYear("");
-        setShowMonthlyModal(false);
+      if (!article) {
+        setArticle(exact.designation || "");
+        lineFormRef.current.article = exact.designation || "";
+      }
+      if (!articleQuery) {
+        setArticleQuery(exact.designation || "");
+        lineFormRef.current.articleQuery = exact.designation || "";
+      }
+      if (!unit) {
+        setUnit("Jour/Mois");
+        lineFormRef.current.unit = "Jour/Mois";
+      }
+      if (!pu) {
+        setPu(
+          exact.prix_unitaire_reference != null
+            ? String(exact.prix_unitaire_reference)
+            : ""
+        );
+        lineFormRef.current.pu =
+          exact.prix_unitaire_reference != null
+            ? String(exact.prix_unitaire_reference)
+            : "";
       }
     } else {
       setOtpId("");
       lineFormRef.current.otpId = "";
       setArticle(value);
       lineFormRef.current.article = value;
-      setUnit("");
-      lineFormRef.current.unit = "";
-      setPu("");
-      lineFormRef.current.pu = "";
+      setArticleQuery(value);
+      lineFormRef.current.articleQuery = value;
     }
   };
 
   const selectArticle = (item) => {
     const nextOtpId = String(item.id);
-    const selectionChanged = String(otpId || "") !== nextOtpId;
     setOtpId(nextOtpId);
     lineFormRef.current.otpId = nextOtpId;
     setArticle(item.designation || "");
@@ -693,17 +742,6 @@ export default function BudgetEditor() {
     setPu(item.prix_unitaire_reference != null ? String(item.prix_unitaire_reference) : "");
     lineFormRef.current.pu =
       item.prix_unitaire_reference != null ? String(item.prix_unitaire_reference) : "";
-    if (selectionChanged) {
-      setMonthlyQtyByYear({});
-      setMonthlyQtyDraftByYear({});
-      lineFormRef.current.monthlyQtyByYear = {};
-      lineFormRef.current.monthlyQtyDraftByYear = {};
-      setNombreJours("1");
-      lineFormRef.current.nombreJours = "1";
-      setModalYears([]);
-      setActiveModalYear("");
-      setShowMonthlyModal(false);
-    }
   };
 
   const ensureActiveSectionInScope = async () => {
@@ -732,6 +770,12 @@ export default function BudgetEditor() {
     return findSectionInScope(refreshedScope, activeSection);
   };
 
+  const handleAddSubmit = async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    await addLine();
+  };
+
   const addLine = async (yearState = monthlyQtyByYear) => {
     const snapshot = lineFormRef.current || {};
     const effectiveYearState =
@@ -742,7 +786,7 @@ export default function BudgetEditor() {
         : snapshot.monthlyQtyDraftByYear && Object.keys(snapshot.monthlyQtyDraftByYear).length > 0
         ? snapshot.monthlyQtyDraftByYear
         : monthlyQtyDraftByYear;
-    const q = Number(sumYearState(effectiveYearState) || 0);
+    const q = Number(maxYearState(effectiveYearState) || 0);
     const r = Math.min(100, Math.max(0, Number(remise || 0)));
     const effectiveArticle = String(snapshot.article || snapshot.articleQuery || article || articleQuery || "").trim();
     const effectiveUnit = "Jour/Mois";
@@ -884,21 +928,21 @@ export default function BudgetEditor() {
       lineFormRef.current.monthlyQtyByYear = {};
       applyLineToForm(line);
     } else {
-      const draft = {};
-      for (const year of initialYears) {
-        draft[year] = emptyMonthlyQty();
-      }
-      setMonthlyQtyByYear({});
+      const currentDraft = monthlyQtyDraftByYear;
+      const currentYears = Object.keys(currentDraft || {}).length
+        ? Object.keys(currentDraft).map(Number).sort((a, b) => a - b)
+        : initialYears.map((year) => Number(year));
+      const draft =
+        Object.keys(currentDraft || {}).length > 0
+          ? currentDraft
+          : currentYears.reduce((acc, year) => {
+              acc[year] = emptyMonthlyQty();
+              return acc;
+            }, {});
       setMonthlyQtyDraftByYear(draft);
-      lineFormRef.current.monthlyQtyByYear = {};
       lineFormRef.current.monthlyQtyDraftByYear = draft;
-      lineFormRef.current.subsection = subsection;
-      setUnit("Jour/Mois");
-      lineFormRef.current.unit = "Jour/Mois";
-      setNombreJours("1");
-      lineFormRef.current.nombreJours = "1";
-      setModalYears(initialYears.map((year) => Number(year)));
-      setActiveModalYear(String(initialYears[0]));
+      setModalYears(currentYears);
+      setActiveModalYear(String(currentYears[0] || initialYears[0] || new Date().getFullYear()));
     }
     setShowMonthlyModal(true);
   };
@@ -963,12 +1007,6 @@ export default function BudgetEditor() {
 
   const onCancelMonthlyModal = () => {
     setEditingLineId(null);
-    setMonthlyQtyDraftByYear({});
-    lineFormRef.current.monthlyQtyDraftByYear = {};
-    setNombreJours("1");
-    lineFormRef.current.nombreJours = "1";
-    setModalYears([]);
-    setActiveModalYear("");
     setShowMonthlyModal(false);
   };
 
@@ -982,6 +1020,10 @@ export default function BudgetEditor() {
             className={`budget-tab ${activeSection === s.code ? "active" : ""}`}
             onClick={() => setActiveSection(s.code)}
           >
+            {(() => {
+              const Icon = SECTION_TAB_ICONS[s.code] || FiLayers;
+              return <Icon aria-hidden="true" />;
+            })()}
             {s.label}
           </button>
         ))}
@@ -989,7 +1031,10 @@ export default function BudgetEditor() {
 
       <div className="budget-content">
         <div className="budget-sidebar">
-          <div className="budget-card-title">Scopes</div>
+          <div className="budget-card-title">
+            <FiGrid aria-hidden="true" />
+            <span>Scopes</span>
+          </div>
           {!!activeScope && (
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
               <button
@@ -1006,7 +1051,7 @@ export default function BudgetEditor() {
                 </div>
                 <div style={{ fontSize: 12, opacity: 0.85 }}>
                   Scope {activeScopeIndex + 1} / {scopes.length} —{" "}
-                  <b>{Number(activeScope.total_scope || 0).toFixed(2)} DH</b>
+                  <b>{formatAmount(activeScope.total_scope)} DH</b>
                 </div>
               </div>
               <button
@@ -1041,7 +1086,7 @@ export default function BudgetEditor() {
               >
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                   <span>{z.nom}</span>
-                  <b>{Number(z.total_scope || 0).toFixed(2)} DH</b>
+                  <b>{formatAmount(z.total_scope)} DH</b>
                 </div>
               </button>
             ))}
@@ -1049,9 +1094,13 @@ export default function BudgetEditor() {
         </div>
 
         <div className="budget-main">
-          <div className="budget-grid">
-            <div className="budget-block">
-              <div className="budget-field-row">
+          <form className="budget-grid budget-form-card" onSubmit={handleAddSubmit} onKeyDown={(e) => {
+            if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
+              e.preventDefault();
+            }
+          }}>
+            <div className="budget-form-row budget-form-row-top">
+              <div className="budget-field-group budget-field-group-wide">
                 <label className="budget-label">Sous-section</label>
                 <select
                   value={subsection}
@@ -1070,13 +1119,6 @@ export default function BudgetEditor() {
                     setPu("");
                     lineFormRef.current.pu = "";
                     setArticlePickerOpen(false);
-                    setMonthlyQtyByYear({});
-                    setMonthlyQtyDraftByYear({});
-                    setNombreJours("1");
-                    lineFormRef.current.nombreJours = "1";
-                    setModalYears([]);
-                    setActiveModalYear("");
-                    setShowMonthlyModal(false);
                   }}
                 >
                   <option value="" disabled hidden>
@@ -1089,10 +1131,7 @@ export default function BudgetEditor() {
                   ))}
                 </select>
               </div>
-            </div>
-
-            <div className="budget-block">
-              <div className="budget-field-row budget-field-row-article">
+              <div className="budget-field-group budget-field-group-wide">
                 <label className="budget-label">Article</label>
                 <div className="article-input-wrap" ref={articleWrapRef}>
                   <input
@@ -1100,11 +1139,14 @@ export default function BudgetEditor() {
                     value={articleQuery}
                     onChange={(e) => onArticleQueryChange(e.target.value)}
                     onClick={() => setArticlePickerOpen(true)}
-                    placeholder="Rechercher un article"
-                    style={{
-                      width: "100%",
-                      maxWidth: "100%",
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }
                     }}
+                    placeholder="Rechercher un article"
+                    style={{ width: '100%', maxWidth: '100%' }}
                   />
                   <button
                     type="button"
@@ -1114,9 +1156,7 @@ export default function BudgetEditor() {
                     aria-label="Afficher les articles"
                     title="Afficher les articles"
                   >
-                    <svg viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M7 10l5 5 5-5" />
-                    </svg>
+                    <FiChevronDown aria-hidden="true" />
                   </button>
                   {articlePickerOpen && filteredCatalogueOtps.length > 0 && (
                     <div className="article-picker">
@@ -1136,175 +1176,233 @@ export default function BudgetEditor() {
                   )}
                 </div>
               </div>
+            </div>
 
-              <div className="budget-form-2col">
-                <div className="budget-field-row">
-                  <label className="budget-label">P.U</label>
-                  <input
-                    type="number"
-                    value={pu}
-                    onChange={(e) => {
-                      const nextValue = e.target.value;
-                      setPu(nextValue);
-                      lineFormRef.current.pu = nextValue;
-                    }}
-                  />
-                </div>
-                <div className="budget-field-row">
-                  <label className="budget-label">Remise (%)</label>
-                  <input
-                    type="number"
-                    value={remise}
-                    min={0}
-                    max={100}
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      if (v === "") {
-                        setRemise("");
-                        return;
-                      }
-                      const n = Number(v);
-                      if (Number.isNaN(n)) return;
-                      const nextValue = String(Math.min(100, Math.max(0, n)));
-                      setRemise(nextValue);
-                    }}
-                  />
-                </div>
+            <div className="budget-form-row budget-form-row-mid">
+              <div className="budget-field-group">
+                <label className="budget-label">P.U</label>
+                <input
+                  type="number"
+                  value={pu}
+                  onChange={(e) => {
+                    const nextValue = e.target.value;
+                    setPu(nextValue);
+                    lineFormRef.current.pu = nextValue;
+                  }}
+                />
               </div>
-
-              <div className="budget-form-2col">
-                <div className="budget-field-row budget-field-row-wide">
-                  <label className="budget-label">Nombre jours/mois</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={30}
-                    value={nombreJours}
-                    onChange={(e) => {
-                      const nextValue = e.target.value;
-                      if (nextValue === "") {
-                        setNombreJours("");
-                        lineFormRef.current.nombreJours = "";
-                        return;
-                      }
-                      const nextNumber = Math.min(30, Math.max(1, Math.floor(Number(nextValue) || 1)));
-                      const normalized = String(nextNumber);
-                      setNombreJours(normalized);
-                      lineFormRef.current.nombreJours = normalized;
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div>
-                <label className="budget-label">Détail des quantités / montants</label>
-                  <button type="button" className="btn-sm btn-secondary" onClick={() => openMonthlyModal("create")}>
-                    Remplir les détails
-                  </button>
-                </div>
-
-              <div className="budget-add-row">
-                <div className="budget-mini-info">
-                  Quantité max: <b>{totalQtyFromMonthly.toFixed(2)}</b>
-                  {"  "}
-                  <span style={{ marginLeft: 10 }}>
-                    Montant brut: <b>{currentLineGross.toFixed(2)} DH</b>
-                  </span>
-                  <span style={{ marginLeft: 10 }}>
-                    Remise: <b>{currentLineDiscount.toFixed(2)} DH</b>
-                  </span>
-                  <span style={{ marginLeft: 10 }}>
-                    Montant net: <b>{currentLineTotal.toFixed(2)} DH</b>
-                  </span>
-                </div>
-                <button type="button" className="btn-sm" onClick={addLine}>
-                  Ajouter au tableau
-                </button>
+              <div className="budget-field-group">
+                <label className="budget-label">Remise (%)</label>
+                <input
+                  type="number"
+                  value={remise}
+                  min={0}
+                  max={100}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v === '') {
+                      setRemise('');
+                      return;
+                    }
+                    const n = Number(v);
+                    if (Number.isNaN(n)) return;
+                    const nextValue = String(Math.min(100, Math.max(0, n)));
+                    setRemise(nextValue);
+                  }}
+                />
               </div>
             </div>
-          </div>
+
+            <div className="budget-form-row budget-form-row-mid">
+              <div className="budget-field-group">
+                <label className="budget-label">Nombre jours/mois</label>
+                <input
+                  type="number"
+                  min={1}
+                  max={30}
+                  value={nombreJours}
+                  onChange={(e) => {
+                    const nextValue = e.target.value;
+                    if (nextValue === '') {
+                      setNombreJours('');
+                      lineFormRef.current.nombreJours = '';
+                      return;
+                    }
+                    const nextNumber = Math.min(30, Math.max(1, Math.floor(Number(nextValue) || 1)));
+                    const normalized = String(nextNumber);
+                    setNombreJours(normalized);
+                    lineFormRef.current.nombreJours = normalized;
+                  }}
+                />
+              </div>
+              <div className="budget-field-group budget-field-group-empty" />
+            </div>
+
+            <div className="budget-details-row">
+              <label className="budget-label budget-label-inline">
+                <FiTable aria-hidden="true" />
+                <span>Détails des quantités / montants</span>
+              </label>
+              <button type="button" className="btn-sm btn-secondary inline-action-btn" onClick={() => openMonthlyModal("create")}>
+                <FiEdit aria-hidden="true" />
+                <span>Remplir les détails</span>
+              </button>
+            </div>
+
+            <div className="budget-summary-bar">
+              <div className="budget-summary-item">
+                <FiHash aria-hidden="true" />
+                <span>Quantité max</span>
+                <b>{formatAmount(totalQtyFromMonthly)}</b>
+              </div>
+              <div className="budget-summary-item">
+                <FiTrendingUp aria-hidden="true" />
+                <span>Montant brut</span>
+                <b>{formatAmount(currentLineGross)} DH</b>
+              </div>
+              <div className="budget-summary-item">
+                <FiPercent aria-hidden="true" />
+                <span>Remise</span>
+                <b>{formatAmount(currentLineDiscount)} DH</b>
+              </div>
+              <div className="budget-summary-item">
+                <FiDollarSign aria-hidden="true" />
+                <span>Montant net</span>
+                <b>{formatAmount(currentLineTotal)} DH</b>
+              </div>
+            </div>
+
+            <div className="budget-add-row">
+              <div className="budget-mini-info" />
+              <button type="submit" className="btn-sm add-table-btn">
+                Ajouter au tableau
+              </button>
+            </div>
+          </form>
 
           <div className="budget-table-wrap">
-            <table className="table budget-table">
+            <div className="budget-section-heading budget-section-heading-table">
+              <FiTable aria-hidden="true" />
+              <span>Tableau</span>
+            </div>
+            <table className="table budget-table budget-table-head">
+              <colgroup>
+                {TABLE_COLUMN_WIDTHS.map((width, index) => (
+                  <col key={`head-col-${index}`} style={{ width }} />
+                ))}
+              </colgroup>
               <thead>
                 <tr>
-                  <th>sous section</th>
-                  <th>Article</th>
-                  <th>Quantité max</th>
-                  <th>P.U</th>
-                  <th>Nombre jours/mois</th>
-                  <th>MontantTotal</th>
+                  <th>
+                    <span className="budget-th-label">
+                      <FiLayers aria-hidden="true" />
+                      <span>Sous section</span>
+                    </span>
+                  </th>
+                  <th>
+                    <span className="budget-th-label">
+                      <FiFile aria-hidden="true" />
+                      <span>Article</span>
+                    </span>
+                  </th>
+                  <th>
+                    <span className="budget-th-label">
+                      <FiHash aria-hidden="true" />
+                      <span>Quantité max</span>
+                    </span>
+                  </th>
+                  <th>
+                    <span className="budget-th-label">
+                      <FiDollarSign aria-hidden="true" />
+                      <span>P.U</span>
+                    </span>
+                  </th>
+                  <th>
+                    <span className="budget-th-label">
+                      <FiCalendar aria-hidden="true" />
+                      <span>Nombre jours/mois</span>
+                    </span>
+                  </th>
+                  <th>
+                    <span className="budget-th-label">
+                      <FiTrendingUp aria-hidden="true" />
+                      <span>MontantTotal</span>
+                    </span>
+                  </th>
                   <th>Détail des montants</th>
                   <th>Action</th>
                 </tr>
               </thead>
-              <tbody>
-                {filteredLines.map((l) => (
-                  <tr key={l.id}>
-                    <td>{l.subsection}</td>
-                    <td>{l.article}</td>
-                    <td>{String(l.qty)}</td>
-                    <td>{String(l.pu)}</td>
-                    <td>{String(l.nombreJours ?? 1)}</td>
-                    <td>
-                      <b>{String(l.total)}</b>
-                    </td>
-                    <td>
-                      <button
-                        type="button"
-                        className="btn-sm btn-secondary"
-                        onClick={() => openMonthlyModal("view", l)}
-                      >
-                        {l.detailsQty}
-                      </button>
-                    </td>
-                    <td>
-                      <div className="line-action-group">
-                        <button
-                          type="button"
-                          className="line-action-btn line-edit-btn"
-                          onClick={() => openMonthlyModal("edit", l)}
-                          title="Modifier la ligne"
-                          aria-label="Modifier la ligne"
-                        >
-                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zm14.71-9.04a1 1 0 0 0 0-1.41l-2.5-2.5a1 1 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.99-1.67z" />
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          className="line-action-btn line-duplicate-btn"
-                          onClick={() => duplicateRow(l.id)}
-                          title="Dupliquer la ligne"
-                          aria-label="Dupliquer la ligne"
-                        >
-                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M9 9h10v10H9z" />
-                            <path d="M5 5h10v10H5z" />
-                          </svg>
-                        </button>
-                        <button
-                          type="button"
-                          className="line-action-btn line-delete-btn"
-                          onClick={() => deleteLine(l.id)}
-                          title="Supprimer la ligne"
-                          aria-label="Supprimer la ligne"
-                        >
-                          <svg viewBox="0 0 24 24" aria-hidden="true">
-                            <path d="M6 6l12 12M18 6L6 18" />
-                          </svg>
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-                {filteredLines.length === 0 && (
-                  <tr>
-                    <td colSpan={8}>Aucune ligne pour ce scope/section.</td>
-                  </tr>
-                )}
-              </tbody>
             </table>
+            <div className="budget-table-scroll">
+              <table className="table budget-table budget-table-body">
+                <colgroup>
+                  {TABLE_COLUMN_WIDTHS.map((width, index) => (
+                    <col key={`body-col-${index}`} style={{ width }} />
+                  ))}
+                </colgroup>
+                <tbody>
+                  {filteredLines.map((l) => (
+                    <tr key={l.id}>
+                      <td>{l.subsection}</td>
+                      <td>{l.article}</td>
+                  <td className="table-num-cell">{formatAmount(l.qty)}</td>
+                  <td className="table-num-cell">{formatAmount(l.pu)}</td>
+                  <td className="table-num-cell">{formatAmount(l.nombreJours ?? 1)}</td>
+                  <td>
+                    <b>{formatAmount(l.total)}</b>
+                  </td>
+                      <td>
+                        <button
+                          type="button"
+                          className="btn-sm line-view-btn inline-action-btn"
+                          onClick={() => openMonthlyModal("view", l)}
+                        >
+                          <FiEye aria-hidden="true" />
+                          <span>Consulter le détail</span>
+                        </button>
+                      </td>
+                      <td>
+                        <div className="line-action-group">
+                          <button
+                            type="button"
+                            className="line-action-btn line-edit-btn"
+                            onClick={() => openMonthlyModal("edit", l)}
+                            title="Modifier la ligne"
+                            aria-label="Modifier la ligne"
+                          >
+                            <FiEdit aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            className="line-action-btn line-duplicate-btn"
+                            onClick={() => duplicateRow(l.id)}
+                            title="Dupliquer la ligne"
+                            aria-label="Dupliquer la ligne"
+                          >
+                            <FiCopy aria-hidden="true" />
+                          </button>
+                          <button
+                            type="button"
+                            className="line-action-btn line-delete-btn"
+                            onClick={() => deleteLine(l.id)}
+                            title="Supprimer la ligne"
+                            aria-label="Supprimer la ligne"
+                          >
+                            <FiTrash aria-hidden="true" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                  {filteredLines.length === 0 && (
+                    <tr>
+                      <td colSpan={8}>Aucune ligne pour ce scope/section.</td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
 
           <div className="budget-footer">
@@ -1315,10 +1413,10 @@ export default function BudgetEditor() {
             </div>
             <div className="budget-footer-center">
               <div>
-                <b>Total scope :</b> {totalScope.toFixed(2)} DH
+                <b>Total scope :</b> {formatAmount(totalScope)} DH
               </div>
               <div>
-                <b>Total section :</b> {totalSection.toFixed(2)} DH
+                <b>Total section :</b> {formatAmount(totalSection)} DH
               </div>
             </div>
             <div className="budget-footer-right">
@@ -1360,6 +1458,9 @@ export default function BudgetEditor() {
                   borderRadius: 28,
                   padding: 14,
                   color: "#fff",
+                  minHeight: 560,
+                  display: "flex",
+                  flexDirection: "column",
                 }}
               >
                 <h4 style={{ marginTop: 0, textAlign: "center", fontSize: 30, fontWeight: 700 }}>
@@ -1387,7 +1488,7 @@ export default function BudgetEditor() {
                     </button>
                   )}
                 </div>
-                <table className="table" style={{ background: "#fff", borderRadius: 8, overflow: "hidden" }}>
+                <table className="table" style={{ background: "#fff", borderRadius: 8, overflow: "hidden", flex: 1 }}>
                   <tbody>
                     {[0, 1, 2].map((rowIdx) => {
                       const rowMonths = MONTHS.slice(rowIdx * 4, rowIdx * 4 + 4);
@@ -1402,7 +1503,7 @@ export default function BudgetEditor() {
                             {rowMonths.map((m) => (
                               <td key={`qty-cell-${m.key}`}>
                                 {modalMode === "view" ? (
-                                  Number(modalQty[m.key] || 0)
+                                  formatAmount(modalQty[m.key])
                                 ) : (
                                   <input
                                     type="number"
@@ -1433,7 +1534,7 @@ export default function BudgetEditor() {
                   </tbody>
                 </table>
                 <div style={{ textAlign: "center", marginTop: 8 }}>
-                  Quantité max: <b>{totalQtyInModal.toFixed(2)}</b>
+                  Quantité max: <b>{formatAmount(totalQtyInModal)}</b>
                 </div>
               </div>
               <div
@@ -1442,12 +1543,15 @@ export default function BudgetEditor() {
                   borderRadius: 28,
                   padding: 14,
                   color: "#fff",
+                  minHeight: 560,
+                  display: "flex",
+                  flexDirection: "column",
                 }}
               >
                 <h4 style={{ marginTop: 0, textAlign: "center", fontSize: 30, fontWeight: 700 }}>
                   Détails des montants
                 </h4>
-                <table className="table" style={{ background: "#fff", borderRadius: 8, overflow: "hidden" }}>
+                <table className="table" style={{ background: "#fff", borderRadius: 8, overflow: "hidden", flex: 1 }}>
                   <tbody>
                     {[0, 1, 2].map((rowIdx) => {
                       const rowMonths = MONTHS.slice(rowIdx * 4, rowIdx * 4 + 4);
@@ -1462,7 +1566,7 @@ export default function BudgetEditor() {
                             {rowMonths.map((m) => {
                               const monthAmount =
                                 monthlyAmountsInModal.find((x) => x.key === m.key)?.amount || 0;
-                              return <td key={`amt-cell-${m.key}`}>{monthAmount.toFixed(2)}</td>;
+                              return <td key={`amt-cell-${m.key}`}>{formatAmount(monthAmount)}</td>;
                             })}
                           </tr>
                         </React.Fragment>
@@ -1471,10 +1575,10 @@ export default function BudgetEditor() {
                   </tbody>
                 </table>
                 <div style={{ textAlign: "center", marginTop: 8 }}>
-                  Total montants brut: <b>{grossInModal.toFixed(2)} DH</b>
+                  Total montants brut: <b>{formatAmount(grossInModal)} DH</b>
                 </div>
                 <div style={{ textAlign: "center" }}>
-                  Total montants net: <b>{netInModal.toFixed(2)} DH</b>
+                  Total montants net: <b>{formatAmount(netInModal)} DH</b>
                 </div>
               </div>
             </div>

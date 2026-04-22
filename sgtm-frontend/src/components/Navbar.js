@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { NavLink } from "react-router-dom";
+import { FiMenu, FiUser } from "react-icons/fi";
 import "../styles.css";
 
 const Navbar = () => {
@@ -23,7 +24,7 @@ const Navbar = () => {
   const closeMenu = () => setMenuOpen(false);
 
   return (
-    <div className="navbar">
+    <header className="navbar">
       <div className="nav-left">
         <div className="nav-burger-wrap" ref={menuRef}>
           <button
@@ -33,7 +34,7 @@ const Navbar = () => {
             aria-expanded={menuOpen}
             onClick={() => setMenuOpen((prev) => !prev)}
           >
-            ☰
+            <FiMenu aria-hidden="true" />
           </button>
           {menuOpen && (
             <ul className="nav-burger-menu">
@@ -55,18 +56,16 @@ const Navbar = () => {
             </ul>
           )}
         </div>
-        <span>
-          <b>SGTM</b>
-        </span>
-        <span>Budget Manager</span>
+        <span className="nav-brand-title">SGTM Budget Manager</span>
       </div>
 
       <div className="nav-right">
-        <span>Nom Utilisateur</span>
-        <img src="https://via.placeholder.com/30" alt="user" className="user-img" />
+        <span className="nav-user-name">Nom Utilisateur</span>
+        <span className="user-avatar" aria-hidden="true">
+          <FiUser />
+        </span>
       </div>
-
-    </div>
+    </header>
   );
 };
 

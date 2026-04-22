@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { deleteProject, getProjects } from "../api/api";
 import "../styles.css";
+import { FiImage } from "react-icons/fi";
 
 const STATUS_META = {
   valide: { label: "Budget validé", className: "status-valid" },
@@ -248,7 +249,8 @@ export default function Projects() {
                 </div>
 
                 <label className="btn-sm btn-secondary project-upload-btn">
-                  Image / Photo
+                  <FiImage aria-hidden="true" />
+                  <span>Image / Photo</span>
                   <input
                     type="file"
                     accept="image/*"
@@ -322,4 +324,3 @@ export default function Projects() {
     </div>
   );
 }
-
