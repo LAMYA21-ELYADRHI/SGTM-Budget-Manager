@@ -8,6 +8,25 @@ const emptyToNull = (v) => {
   return v;
 };
 
+const normalizeProjectPayload = (projectData) => ({
+  code: projectData.code ?? projectData.codeProjet ?? "",
+  name: projectData.name ?? projectData.nomProjet ?? "",
+  client: projectData.client ?? "",
+  pole: projectData.pole ?? "",
+  location: projectData.location ?? projectData.localisation ?? "",
+  project_manager: projectData.project_manager ?? projectData.directeurProjet ?? "",
+  start_date: emptyToNull(projectData.start_date ?? projectData.dateDebut ?? ""),
+  end_date: emptyToNull(projectData.end_date ?? projectData.dateFin ?? ""),
+  is_group: projectData.is_group ?? projectData.groupement ?? false,
+  is_validated: projectData.is_validated ?? false,
+  group_names: projectData.group_names ?? "",
+  scope: projectData.scope ?? projectData.scopes ?? "",
+  project_type: projectData.project_type ?? projectData.typeProjet ?? "",
+  scope_date: emptyToNull(projectData.scope_date ?? projectData.dateScope ?? ""),
+  scope_start_date: emptyToNull(projectData.scope_start_date ?? ""),
+  scope_end_date: emptyToNull(projectData.scope_end_date ?? ""),
+});
+
 const apiErrorMessage = (error) => {
   const data = error?.response?.data;
   if (!data) return error?.message || "Erreur API";
@@ -31,25 +50,7 @@ export const createProject = async (projectData) => {
   try {
     // Le backend attend exactement ces champs (schemas `ProjectCreate`)
     // On supporte aussi d'anciens noms (codeProjet, nomProjet, ...) si existants.
-    const cleanData = {
-      code: projectData.code ?? projectData.codeProjet ?? "",
-      name: projectData.name ?? projectData.nomProjet ?? "",
-      client: projectData.client ?? "",
-      pole: projectData.pole ?? "",
-      location: projectData.location ?? projectData.localisation ?? "",
-      project_manager:
-        projectData.project_manager ?? projectData.directeurProjet ?? "",
-      start_date: projectData.start_date ?? projectData.dateDebut ?? "",
-      end_date: projectData.end_date ?? projectData.dateFin ?? "",
-      is_group: projectData.is_group ?? projectData.groupement ?? false,
-      is_validated: projectData.is_validated ?? false,
-      group_names: projectData.group_names ?? "",
-      scope: projectData.scope ?? projectData.scopes ?? "",
-      project_type: projectData.project_type ?? projectData.typeProjet ?? "",
-      scope_date: emptyToNull(projectData.scope_date ?? projectData.dateScope ?? ""),
-      scope_start_date: emptyToNull(projectData.scope_start_date ?? ""),
-      scope_end_date: emptyToNull(projectData.scope_end_date ?? ""),
-    };
+    const cleanData = normalizeProjectPayload(projectData);
     console.log('📤 API data:', cleanData);
 
     const response = await axios.post(`${API_URL}/projects`, cleanData);
@@ -83,9 +84,10 @@ export const getProjects = async () => {
 
 export const updateProject = async (projectId, projectData) => {
   try {
+    const cleanData = normalizeProjectPayload(projectData);
     const response = await axios.put(
       `${API_URL}/projects/${projectId}`,
-      projectData
+      cleanData
     );
     return response.data;
   } catch (error) {

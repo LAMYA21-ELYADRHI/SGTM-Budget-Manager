@@ -33,6 +33,36 @@ const isDateInRange = (dateValue, startValue, endValue) => {
   return date >= start && date <= end;
 };
 
+const buildProjectSignature = ({ formData, groupement, groupementNames, scopesList }) =>
+  JSON.stringify({
+    formData: {
+      code: String(formData.code || ""),
+      name: String(formData.name || ""),
+      client: String(formData.client || ""),
+      pole: String(formData.pole || ""),
+      location: String(formData.location || ""),
+      project_manager: String(formData.project_manager || ""),
+      start_date: String(formData.start_date || ""),
+      end_date: String(formData.end_date || ""),
+      project_type: String(formData.project_type || ""),
+      scope_start_date: String(formData.scope_start_date || ""),
+      scope_end_date: String(formData.scope_end_date || ""),
+      sections: Array.isArray(formData.sections) ? [...formData.sections].sort() : [],
+    },
+    groupement: String(groupement || ""),
+    groupementNames: Array.isArray(groupementNames)
+      ? groupementNames.map((name) => String(name || "").trim())
+      : [],
+    scopesList: Array.isArray(scopesList)
+      ? scopesList.map((scope) => ({
+          nom: String(scope.nom || "").trim(),
+          sections: Array.isArray(scope.sections) ? [...scope.sections].sort() : [],
+          date_debut: String(scope.date_debut || ""),
+          date_fin: String(scope.date_fin || ""),
+        }))
+      : [],
+  });
+
 const buildScope = (slot, seed = {}) => {
   const sections = Array.isArray(seed.sections)
     ? seed.sections.map(normalizeSectionCode).filter(Boolean)
@@ -59,6 +89,7 @@ const ProjectForm = () => {
   const [groupement, setGroupement] = useState(""); // "oui" ou "non"
   const [groupementNames, setGroupementNames] = useState([""]);
   const [scopesList, setScopesList] = useState([buildScope(1)]);
+  const [initialSignature, setInitialSignature] = useState("");
 
   const [formData, setFormData] = useState({
     code: "",
@@ -95,6 +126,8 @@ const ProjectForm = () => {
     (async () => {
       try {
         const p = await getProject(projectId);
+        let gn = [];
+        let sc = [];
 
         setFormData((prev) => ({
           ...prev,
@@ -121,7 +154,7 @@ const ProjectForm = () => {
         // groupement
         setGroupement(p.is_group ? "oui" : "non");
         try {
-          const gn = p.group_names ? JSON.parse(p.group_names) : [];
+          gn = p.group_names ? JSON.parse(p.group_names) : [];
           setGroupementNames(Array.isArray(gn) && gn.length ? gn : [""]);
         } catch {
           setGroupementNames([""]);
@@ -129,19 +162,132 @@ const ProjectForm = () => {
 
         // scopes (compat: ancien format string[] ou nouveau format structuré)
         try {
-          const sc = p.scope ? JSON.parse(p.scope) : [];
+          sc = p.scope ? JSON.parse(p.scope) : [];
           if (Array.isArray(sc) && sc.length) {
             if (typeof sc[0] === "string") {
               setScopesList(sc.map((name, idx) => buildScope(idx + 1, { nom: name })));
+              setInitialSignature(
+                buildProjectSignature({
+                  formData: {
+                    code: p.code || "",
+                    name: p.name || "",
+                    client: p.client || "",
+                    pole: p.pole || "",
+                    location: p.location || "",
+                    project_manager: p.project_manager || "",
+                    start_date: p.start_date || "",
+                    end_date: p.end_date || "",
+                    project_type: p.project_type || "",
+                    scope_start_date: p.scope_start_date || "",
+                    scope_end_date: p.scope_end_date || "",
+                    sections:
+                      typeof p.sections === "string" && p.sections
+                        ? p.sections
+                            .split(",")
+                            .map((s) => normalizeSectionCode(s.trim()))
+                            .filter(Boolean)
+                        : [],
+                  },
+                  groupement: p.is_group ? "oui" : "non",
+                  groupementNames: Array.isArray(gn) && gn.length ? gn : [""],
+                  scopesList: sc.map((name, idx) => buildScope(idx + 1, { nom: name })),
+                })
+              );
             } else {
               setScopesList(sc.map((scope, idx) => buildScope(idx + 1, scope)));
+              setInitialSignature(
+                buildProjectSignature({
+                  formData: {
+                    code: p.code || "",
+                    name: p.name || "",
+                    client: p.client || "",
+                    pole: p.pole || "",
+                    location: p.location || "",
+                    project_manager: p.project_manager || "",
+                    start_date: p.start_date || "",
+                    end_date: p.end_date || "",
+                    project_type: p.project_type || "",
+                    scope_start_date: p.scope_start_date || "",
+                    scope_end_date: p.scope_end_date || "",
+                    sections:
+                      typeof p.sections === "string" && p.sections
+                        ? p.sections
+                            .split(",")
+                            .map((s) => normalizeSectionCode(s.trim()))
+                            .filter(Boolean)
+                        : [],
+                  },
+                  groupement: p.is_group ? "oui" : "non",
+                  groupementNames: Array.isArray(gn) && gn.length ? gn : [""],
+                  scopesList: sc.map((scope, idx) => buildScope(idx + 1, scope)),
+                })
+              );
             }
           } else {
             setScopesList([buildScope(1)]);
+            setInitialSignature(
+              buildProjectSignature({
+                formData: {
+                  code: p.code || "",
+                  name: p.name || "",
+                  client: p.client || "",
+                  pole: p.pole || "",
+                  location: p.location || "",
+                  project_manager: p.project_manager || "",
+                  start_date: p.start_date || "",
+                  end_date: p.end_date || "",
+                  project_type: p.project_type || "",
+                  scope_start_date: p.scope_start_date || "",
+                  scope_end_date: p.scope_end_date || "",
+                  sections:
+                    typeof p.sections === "string" && p.sections
+                      ? p.sections
+                          .split(",")
+                          .map((s) => normalizeSectionCode(s.trim()))
+                          .filter(Boolean)
+                      : [],
+                },
+                groupement: p.is_group ? "oui" : "non",
+                groupementNames: Array.isArray(gn) && gn.length ? gn : [""],
+                scopesList: [buildScope(1)],
+              })
+            );
           }
         } catch {
           // anciens projets: scope en texte simple
           setScopesList([buildScope(1, { nom: p.scope || "" })]);
+          setInitialSignature(
+            buildProjectSignature({
+              formData: {
+                code: p.code || "",
+                name: p.name || "",
+                client: p.client || "",
+                pole: p.pole || "",
+                location: p.location || "",
+                project_manager: p.project_manager || "",
+                start_date: p.start_date || "",
+                end_date: p.end_date || "",
+                project_type: p.project_type || "",
+                scope_start_date: p.scope_start_date || "",
+                scope_end_date: p.scope_end_date || "",
+                sections:
+                  typeof p.sections === "string" && p.sections
+                    ? p.sections
+                        .split(",")
+                        .map((s) => normalizeSectionCode(s.trim()))
+                        .filter(Boolean)
+                    : [],
+              },
+              groupement: p.is_group ? "oui" : "non",
+              groupementNames: Array.isArray(gn) && gn.length ? gn : [""],
+              scopesList:
+                Array.isArray(sc) && sc.length
+                  ? sc.map((scope, idx) =>
+                      buildScope(idx + 1, typeof sc[0] === "string" ? { nom: scope } : scope)
+                    )
+                  : [buildScope(1)],
+            })
+          );
         }
       } catch (e) {
         alert(e?.message || "Erreur API ❌");
@@ -225,6 +371,17 @@ const ProjectForm = () => {
       }
     }
 
+    const currentSignature = buildProjectSignature({
+      formData,
+      groupement,
+      groupementNames,
+      scopesList,
+    });
+    if (projectId && initialSignature && currentSignature === initialSignature) {
+      navigate(`/budget/${projectId}`);
+      return;
+    }
+
     try {
       const cleanedGroupNames =
         groupement === "oui"
@@ -292,7 +449,9 @@ const ProjectForm = () => {
         alert("Projet ajouté !");
       }
 
-      navigate("/projects");
+      setInitialSignature(currentSignature);
+
+      navigate(projectId ? `/budget/${projectId}` : "/projects");
     } catch (e) {
       alert(e?.message || "Erreur API ❌");
     }
@@ -411,27 +570,29 @@ const ProjectForm = () => {
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 {scopesList.map((scope, idx) => (
                   <div key={`scope-left-${idx}`} className="scope-card">
-                    <div className="inline-row" style={{ marginBottom: 8 }}>
-                      <input
-                        type="text"
-                        placeholder={`Scope ${idx + 1}`}
-                        value={scope.nom}
-                        onChange={(e) => updateScope(idx, { nom: e.target.value })}
-                        style={{ width: 220, padding: "7px 9px", fontSize: 13 }}
-                      />
-                      <button className="btn-sm icon-btn" type="button" title="Ajouter un scope" onClick={addScope}>
-                        +
-                      </button>
-                      {scopesList.length > 1 && (
-                        <button
-                          className="btn-sm btn-danger icon-btn"
-                          type="button"
-                          title="Supprimer ce scope"
-                          onClick={() => removeScope(idx)}
-                        >
-                          ×
+                    <div className="inline-row" style={{ marginBottom: 8, justifyContent: "space-between" }}>
+                      <div className="inline-row" style={{ flex: 1 }}>
+                        <input
+                          type="text"
+                          placeholder={`Scope ${idx + 1}`}
+                          value={scope.nom}
+                          onChange={(e) => updateScope(idx, { nom: e.target.value })}
+                          style={{ width: 220, padding: "7px 9px", fontSize: 13 }}
+                        />
+                        <button className="btn-sm icon-btn" type="button" title="Ajouter un scope" onClick={addScope}>
+                          +
                         </button>
-                      )}
+                        {scopesList.length > 1 && (
+                          <button
+                            className="btn-sm btn-danger icon-btn"
+                            type="button"
+                            title="Supprimer ce scope"
+                            onClick={() => removeScope(idx)}
+                          >
+                            ×
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     <div

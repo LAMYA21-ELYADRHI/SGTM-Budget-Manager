@@ -47,6 +47,14 @@ with engine.begin() as conn:
         conn.execute(
             text("ALTER TABLE lignes_otp ADD COLUMN nombre_jours INTEGER NOT NULL DEFAULT 1")
         )
+    if "heures_marche" not in ligne_col_names:
+        conn.execute(
+            text("ALTER TABLE lignes_otp ADD COLUMN heures_marche FLOAT NOT NULL DEFAULT 0")
+        )
+    if "consommation_l_h" not in ligne_col_names:
+        conn.execute(
+            text("ALTER TABLE lignes_otp ADD COLUMN consommation_l_h FLOAT NOT NULL DEFAULT 0")
+        )
 
 
 def seed_default_catalogue_sections():

@@ -541,6 +541,8 @@ def create_ligne_otp(
         quantite_globale=payload.quantite_globale,
         prix_unitaire=payload.prix_unitaire,
         montant_total=payload.montant_total,
+        heures_marche=payload.heures_marche,
+        consommation_l_h=payload.consommation_l_h,
         sous_section_id=sous_section_id,
     )
     db.add(line)
@@ -584,6 +586,8 @@ def update_ligne_otp(ligne_id: int, payload: budget_schemas.LigneOTPCreate, db: 
     line.quantite_globale = payload.quantite_globale
     line.prix_unitaire = payload.prix_unitaire
     line.montant_total = payload.montant_total
+    line.heures_marche = payload.heures_marche
+    line.consommation_l_h = payload.consommation_l_h
 
     # stratégie simple: remplacer complètement les détails mensuels
     for existing in list(line.details_mensuels or []):
@@ -625,6 +629,8 @@ def duplicate_ligne_otp(ligne_id: int, db: Session = Depends(get_db)):
         quantite_globale=source.quantite_globale,
         prix_unitaire=source.prix_unitaire,
         montant_total=source.montant_total,
+        heures_marche=source.heures_marche,
+        consommation_l_h=source.consommation_l_h,
         sous_section_id=source.sous_section_id,
     )
     db.add(new_line)
@@ -708,7 +714,8 @@ def recalculate_budget(budget_id: int, db: Session = Depends(get_db)):
                 ss.total_sous_section = total_ss
                 total_section += total_ss
             section.total_section = total_section
-            total_scope += total_section
+            if canonical_section_code(section.nom) != "GASOIL":
+                total_scope += total_section
         scope.total_scope = total_scope
         total_global += total_scope
 

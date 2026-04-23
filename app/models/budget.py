@@ -82,6 +82,8 @@ class LigneOTP(Base):
     quantite_globale = Column(Float, default=0.0)
     prix_unitaire = Column(Float, default=0.0)
     montant_total = Column(Float, default=0.0)
+    heures_marche = Column(Float, default=0.0)
+    consommation_l_h = Column(Float, default=0.0)
     
     sous_section_id = Column(Integer, ForeignKey("sous_sections.id"))
     sous_section = relationship("SousSection", back_populates="lignes_otp")

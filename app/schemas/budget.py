@@ -34,6 +34,8 @@ class LigneOTPBase(BaseModel):
     quantite_globale: float
     prix_unitaire: float
     montant_total: float
+    heures_marche: float = 0.0
+    consommation_l_h: float = 0.0
 
 
 class LigneOTPCreate(LigneOTPBase):

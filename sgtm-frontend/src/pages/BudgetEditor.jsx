@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import { useParams } from "react-router-dom";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
 import "../styles.css";
 import {
   FiBriefcase,
@@ -23,6 +23,7 @@ import {
   FiTrendingUp,
   FiUsers,
   FiBox,
+  FiSearch,
 } from "react-icons/fi";
 import {
   assignSectionsToScope,
@@ -44,6 +45,13 @@ import {
   normalizeSectionCode,
   SECTION_OPTIONS,
 } from "../constants/sections";
+import {
+  collectSectionLines,
+  deriveGasoilRows,
+  parseGasoilCatalogueCsv,
+  serializeGasoilRowToPayload,
+  sumGasoilRows,
+} from "../services/gasoil";
 
 const MONTHS = [
   { key: "janvier", month: 1, label: "Janvier" },
@@ -158,6 +166,18 @@ const SECTION_TAB_ICONS = {
 };
 
 const TABLE_COLUMN_WIDTHS = ["18%", "24%", "10%", "10%", "12%", "12%", "14%", "10%"];
+const GASOIL_TABLE_COLUMN_WIDTHS = [
+  "8%",
+  "12%",
+  "17%",
+  "10%",
+  "10%",
+  "10%",
+  "10%",
+  "12%",
+  "11%",
+  "10%",
+];
 
 const parseUnitPrice = (value) => {
   const parsed = Number(String(value || "").replace(",", ".").trim());
@@ -199,6 +219,7 @@ const parseMaterialCatalogueCsv = (csvText) =>
     .filter(Boolean);
 
 export default function BudgetEditor() {
+  const navigate = useNavigate();
   const { projectId } = useParams();
   const [activeSection, setActiveSection] = useState(SECTION_OPTIONS[3].code);
   const [activeScopeId, setActiveScopeId] = useState(null);
@@ -210,6 +231,13 @@ export default function BudgetEditor() {
   const [catalogueSousSections, setCatalogueSousSections] = useState([]);
   const [catalogueOtps, setCatalogueOtps] = useState([]);
   const [materialCatalogue, setMaterialCatalogue] = useState([]);
+  const [gasoilCatalogue, setGasoilCatalogue] = useState([]);
+  const [gasoilPricePerL, setGasoilPricePerL] = useState("");
+  const [gasoilPriceByScopeId, setGasoilPriceByScopeId] = useState({});
+  const [gasoilArticleQuery, setGasoilArticleQuery] = useState("");
+  const [gasoilDetailLine, setGasoilDetailLine] = useState(null);
+  const [gasoilDetailActiveYear, setGasoilDetailActiveYear] = useState("");
+  const [showGasoilDetailModal, setShowGasoilDetailModal] = useState(false);
 
   const [subsection, setSubsection] = useState("");
   const [otpId, setOtpId] = useState("");
@@ -274,6 +302,21 @@ export default function BudgetEditor() {
         const csvText = await response.text();
         setMaterialCatalogue(parseMaterialCatalogueCsv(csvText));
       } catch (e) {}
+    })();
+  }, []);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const response = await fetch(`${process.env.PUBLIC_URL}/data/gasoil-catalogue.csv`);
+        if (!response.ok) {
+          throw new Error("Catalogue Gasoil introuvable.");
+        }
+        const csvText = await response.text();
+        setGasoilCatalogue(parseGasoilCatalogueCsv(csvText));
+      } catch (e) {
+        setGasoilCatalogue([]);
+      }
     })();
   }, []);
 
@@ -393,6 +436,17 @@ export default function BudgetEditor() {
     );
   }, [activeScope, projectScopeList]);
 
+  const activeGasoilPricePerL = useMemo(() => {
+    if (!activeScope) return "";
+    const saved = gasoilPriceByScopeId[activeScope.id];
+    return saved != null ? String(saved) : "";
+  }, [activeScope, gasoilPriceByScopeId]);
+
+  useEffect(() => {
+    if (activeSection !== "GASOIL") return;
+    setGasoilPricePerL(activeGasoilPricePerL);
+  }, [activeGasoilPricePerL, activeSection]);
+
   const scopeYears = useMemo(() => {
     const start = activeProjectScope?.date_debut || project?.scope_start_date || project?.start_date;
     const end = activeProjectScope?.date_fin || project?.scope_end_date || project?.end_date;
@@ -412,7 +466,20 @@ export default function BudgetEditor() {
   );
 
   const isMaterialSection = activeSection === "MATERIEL";
+  const isGasoilSection = activeSection === "GASOIL";
 
+  useEffect(() => {
+    setGasoilArticleQuery("");
+    if (!isGasoilSection) {
+      setGasoilDetailLine(null);
+      setShowGasoilDetailModal(false);
+    }
+  }, [isGasoilSection]);
+
+  const materialSectionLines = useMemo(
+    () => collectSectionLines(activeScope, "MATERIEL"),
+    [activeScope]
+  );
   const materialSousSections = useMemo(
     () =>
       MATERIAL_SUBSECTIONS.filter((name) =>
@@ -444,6 +511,38 @@ export default function BudgetEditor() {
 
   const availableCatalogueOtps = isMaterialSection ? materialOtps : catalogueOtps;
 
+  const gasoilRows = useMemo(() => {
+    if (!isGasoilSection) return [];
+    const basePrice = Number(gasoilPricePerL || 0);
+    return deriveGasoilRows(materialSectionLines, gasoilCatalogue, basePrice);
+  }, [gasoilCatalogue, gasoilPricePerL, isGasoilSection, materialSectionLines]);
+
+  const getSectionScopeTotal = useCallback(
+    (scope, sectionCode) => {
+      if (!scope) return 0;
+      if (sectionCode === "GASOIL") {
+        const basePrice = Number(gasoilPriceByScopeId[scope.id] || 0);
+        const materialLines = collectSectionLines(scope, "MATERIEL");
+        return sumGasoilRows(deriveGasoilRows(materialLines, gasoilCatalogue, basePrice));
+      }
+      return collectSectionLines(scope, sectionCode).reduce(
+        (sum, line) => sum + Number(line?.total || 0),
+        0
+      );
+    },
+    [gasoilCatalogue, gasoilPriceByScopeId]
+  );
+
+  const activeSectionScopeTotal = useMemo(
+    () => getSectionScopeTotal(activeScope, activeSection),
+    [activeScope, activeSection, getSectionScopeTotal]
+  );
+
+  const activeSectionTotal = useMemo(
+    () => scopes.reduce((sum, scope) => sum + getSectionScopeTotal(scope, activeSection), 0),
+    [scopes, activeSection, getSectionScopeTotal]
+  );
+
   const filteredCatalogueOtps = useMemo(() => {
     const query = String(articleQuery || "").trim().toLowerCase();
     if (!query) return availableCatalogueOtps;
@@ -461,7 +560,58 @@ export default function BudgetEditor() {
     return maxYearState(monthlyQtyByYear);
   }, [monthlyQtyByYear]);
 
+  const filteredGasoilRows = useMemo(() => {
+    if (!isGasoilSection) return [];
+    const query = String(gasoilArticleQuery || "").trim().toLowerCase();
+    if (!query) return gasoilRows;
+    return gasoilRows.filter((row) =>
+      [row.article, row.subsection, row.codeOtp]
+        .map((value) => String(value || "").toLowerCase())
+        .join(" ")
+        .includes(query)
+    );
+  }, [gasoilArticleQuery, gasoilRows, isGasoilSection]);
+
+  const gasoilDetailYearState = useMemo(
+    () =>
+      detailsToYearState(
+        gasoilDetailLine?.materialLine?.detailsMensuels ||
+          gasoilDetailLine?.detailsMensuels ||
+          []
+      ),
+    [gasoilDetailLine]
+  );
+
+  const gasoilDetailYears = useMemo(
+    () => Object.keys(gasoilDetailYearState).map(Number).sort((a, b) => a - b),
+    [gasoilDetailYearState]
+  );
+
+  const gasoilDetailModalQty = useMemo(
+    () => gasoilDetailYearState[Number(gasoilDetailActiveYear)] || emptyMonthlyQty(),
+    [gasoilDetailYearState, gasoilDetailActiveYear]
+  );
+
+  const gasoilDetailMonthlyAmounts = useMemo(() => {
+    const nombreJours = Math.min(30, Math.max(1, Number(gasoilDetailLine?.nombreJours || 1)));
+    const heuresMarche = Number(gasoilDetailLine?.heuresMarche || 0);
+    const consommationLH = Number(gasoilDetailLine?.consommationLH || 0);
+    const prixPerL = Number(gasoilPricePerL || gasoilDetailLine?.prixPerL || 0);
+    const consommationJournaliereL = heuresMarche * consommationLH;
+    return MONTHS.map((m) => {
+      const qty = Number(gasoilDetailModalQty[m.key] || 0);
+      const amount = qty * nombreJours * consommationJournaliereL * prixPerL;
+      return { ...m, qty, amount };
+    });
+  }, [gasoilDetailLine, gasoilDetailModalQty, gasoilPricePerL]);
+
+  const gasoilDetailTotalAmount = useMemo(
+    () => gasoilDetailMonthlyAmounts.reduce((sum, m) => sum + Number(m.amount || 0), 0),
+    [gasoilDetailMonthlyAmounts]
+  );
+
   const filteredLines = useMemo(() => {
+    if (isGasoilSection) return [];
     if (!activeScope) return [];
     const section = findSectionInScope(activeScope, activeSection);
     if (!section) return [];
@@ -486,7 +636,7 @@ export default function BudgetEditor() {
       }
     }
     return out;
-  }, [activeScope, activeSection]);
+  }, [activeScope, activeSection, isGasoilSection]);
 
   const duplicateRow = async (lineId) => {
     try {
@@ -539,20 +689,27 @@ export default function BudgetEditor() {
     return Math.max(0, currentLineGross * (r / 100));
   }, [currentLineGross, remise]);
 
-  const totalScope = useMemo(() => {
-    if (!activeScope) return 0;
-    return Number(activeScope.total_scope || 0);
-  }, [activeScope]);
-
-  const totalSection = useMemo(() => {
-    if (!activeScope) return 0;
-    return scopes.reduce((sum, scope) => sum + Number(scope?.total_scope || 0), 0);
-  }, [activeScope, scopes]);
-
   const activeScopeIndex = useMemo(() => {
     if (!activeScopeId) return -1;
     return scopes.findIndex((s) => s.id === activeScopeId);
   }, [scopes, activeScopeId]);
+
+  const goToProjectEditor = () => {
+    navigate(`/create-project/${projectId}`);
+  };
+
+  const openGasoilDetailModal = (row) => {
+    setGasoilDetailLine(row);
+    const detailYears = Array.from(
+      new Set(
+        Object.keys(
+          detailsToYearState(row?.materialLine?.detailsMensuels || row?.detailsMensuels || []) || {}
+        ).map(Number)
+      )
+    ).sort((a, b) => a - b);
+    setGasoilDetailActiveYear(String(detailYears[0] || new Date().getFullYear()));
+    setShowGasoilDetailModal(true);
+  };
 
   const goPrevScope = () => {
     if (activeScopeIndex <= 0) return;
@@ -886,9 +1043,59 @@ export default function BudgetEditor() {
     }
   };
 
+  const syncGasoilSectionToBudget = async () => {
+    if (!isGasoilSection) return;
+    if (!activeScope) {
+      throw new Error("Veuillez sélectionner un scope.");
+    }
+
+    const section = await ensureActiveSectionInScope();
+    if (!section) {
+      throw new Error("Section Gasoil non disponible.");
+    }
+
+    const existingLines = collectSectionLines(activeScope, "GASOIL");
+    for (const line of existingLines) {
+      await deleteLigneOtp(line.id);
+    }
+
+    const sectionRefresh = await refreshBudget();
+    const refreshedScope =
+      (Array.isArray(sectionRefresh?.scopes)
+        ? sectionRefresh.scopes.find((scope) => scope.id === activeScope.id)
+        : null) || activeScope;
+    const gasoilSection = findSectionInScope(refreshedScope, "GASOIL") || section;
+    if (!gasoilSection) {
+      throw new Error("Section Gasoil introuvable après synchronisation.");
+    }
+
+    if (!gasoilRows.length) {
+      return;
+    }
+
+    const subsectionsByName = new Map(
+      (gasoilSection.sous_sections || []).map((item) => [item.nom, item])
+    );
+
+    for (const row of gasoilRows) {
+      const targetSousSectionName = row.subsection || row.catalogueEntry?.sousSection || "Gasoil";
+      let targetSousSection = subsectionsByName.get(targetSousSectionName) || null;
+
+      if (!targetSousSection) {
+        targetSousSection = await createSousSection(gasoilSection.id, { nom: targetSousSectionName });
+        subsectionsByName.set(targetSousSectionName, targetSousSection);
+      }
+
+      await createLigneOtp(targetSousSection.id, serializeGasoilRowToPayload(row));
+    }
+  };
+
   const onSave = async () => {
     if (!budget?.id) return;
     try {
+      if (isGasoilSection) {
+        await syncGasoilSectionToBudget();
+      }
       const updated = await recalculateBudget(budget.id);
       setBudget(updated);
       setScopes(Array.isArray(updated?.scopes) ? updated.scopes : []);
@@ -1010,6 +1217,418 @@ export default function BudgetEditor() {
     setShowMonthlyModal(false);
   };
 
+  if (isGasoilSection) {
+    return (
+      <div className="budget-page gasoil-page">
+        <div className="budget-top-tabs">
+          {SECTION_OPTIONS.map((s) => (
+            <button
+              key={s.code}
+              type="button"
+              className={`budget-tab ${activeSection === s.code ? "active" : ""}`}
+              onClick={() => setActiveSection(s.code)}
+            >
+              {(() => {
+                const Icon = SECTION_TAB_ICONS[s.code] || FiLayers;
+                return <Icon aria-hidden="true" />;
+              })()}
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="budget-content gasoil-content">
+          <div className="budget-sidebar">
+            <div className="budget-card-title budget-card-title-with-action">
+              <div className="budget-card-title-main">
+                <FiGrid aria-hidden="true" />
+                <span>Scopes</span>
+              </div>
+              <button
+                type="button"
+                className="btn-sm btn-secondary icon-btn scope-edit-btn"
+                onClick={goToProjectEditor}
+                title="Modifier le projet"
+                aria-label="Modifier le projet"
+              >
+                <FiEdit aria-hidden="true" />
+              </button>
+            </div>
+            {!!activeScope && (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
+                <button
+                  type="button"
+                  className="btn-sm btn-secondary"
+                  onClick={goPrevScope}
+                  disabled={activeScopeIndex <= 0}
+                >
+                  ◀
+                </button>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, overflow: "hidden", textOverflow: "ellipsis" }}>
+                    {activeScope.nom}
+                  </div>
+                  <div style={{ fontSize: 12, opacity: 0.85 }}>
+                    Scope {activeScopeIndex + 1} / {scopes.length} -{" "}
+                    <b>{formatAmount(activeSectionScopeTotal)} DH</b>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="btn-sm btn-secondary"
+                  onClick={goNextScope}
+                  disabled={activeScopeIndex >= scopes.length - 1}
+                >
+                  ▶
+                </button>
+              </div>
+            )}
+            <div className="budget-scope-list">
+              {loading && <div>Chargement...</div>}
+              {!loading && error && <div style={{ color: "crimson" }}>{error}</div>}
+              {!loading && !error && scopes.length === 0 && (
+                <div>
+                  Aucun scope.
+                  <div style={{ fontSize: 12, opacity: 0.8, marginTop: 6 }}>
+                    Ajoute les scopes dans <b>Créer projet</b>, puis reviens ici.
+                  </div>
+                </div>
+              )}
+              {scopes.map((z) => (
+                <button
+                  key={z.id}
+                  type="button"
+                  className={`budget-scope-item ${
+                    activeScopeId === z.id ? "active" : ""
+                  }`}
+                  onClick={() => setActiveScopeId(z.id)}
+                >
+                  <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+                    <span>{z.nom}</span>
+                    <b>{formatAmount(getSectionScopeTotal(z, activeSection))} DH</b>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="budget-main gasoil-main">
+            <div className="budget-form-card gasoil-toolbar-card">
+              <div className="budget-form-row budget-form-row-top gasoil-toolbar-row">
+                <div className="budget-field-group budget-field-group-wide">
+                  <label className="budget-label">Article</label>
+                  <div className="article-input-wrap">
+                    <input
+                      type="text"
+                      value={gasoilArticleQuery}
+                      onChange={(e) => setGasoilArticleQuery(e.target.value)}
+                      placeholder="Rechercher un article"
+                      aria-label="Rechercher un article Gasoil"
+                    />
+                    <span className="article-filter-btn" aria-hidden="true">
+                      <FiSearch aria-hidden="true" />
+                    </span>
+                  </div>
+                </div>
+                <div className="budget-field-group gasoil-price-group">
+                  <label className="budget-label">Prix de L en DH</label>
+                  <input
+                    type="number"
+                    min={0}
+                    step="0.01"
+                    value={gasoilPricePerL}
+                    onChange={(e) => {
+                      const nextValue = e.target.value;
+                      setGasoilPricePerL(nextValue);
+                      if (activeScope?.id) {
+                        setGasoilPriceByScopeId((prev) => ({
+                          ...prev,
+                          [activeScope.id]: nextValue,
+                        }));
+                      }
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="budget-table-wrap">
+              <div className="budget-section-heading budget-section-heading-table">
+                <FiTable aria-hidden="true" />
+                <span>Tableau Gasoil</span>
+              </div>
+              <table className="table budget-table budget-table-head gasoil-table">
+                <colgroup>
+                  {GASOIL_TABLE_COLUMN_WIDTHS.map((width, index) => (
+                    <col key={`gasoil-head-col-${index}`} style={{ width }} />
+                  ))}
+                </colgroup>
+                <thead>
+                  <tr>
+                    <th>Code OTP</th>
+                    <th>Sous section</th>
+                    <th>Article</th>
+                    <th>Nombre de matériels</th>
+                    <th>Nbr Jours/Mois</th>
+                    <th>Heures marche</th>
+                    <th>Consommation L/H</th>
+                    <th>Consommation journalière en L</th>
+                    <th>Montant total</th>
+                    <th>Détail des montants</th>
+                  </tr>
+                </thead>
+              </table>
+              <div className="budget-table-scroll">
+                <table className="table budget-table budget-table-body gasoil-table">
+                  <colgroup>
+                    {GASOIL_TABLE_COLUMN_WIDTHS.map((width, index) => (
+                      <col key={`gasoil-body-col-${index}`} style={{ width }} />
+                    ))}
+                  </colgroup>
+                  <tbody>
+                    {filteredGasoilRows.map((row) => (
+                      <tr key={`${row.id}-${row.article}`}>
+                        <td className="table-num-cell">{row.codeOtp || "-"}</td>
+                        <td>{row.subsection || "-"}</td>
+                        <td>{row.article}</td>
+                        <td className="table-num-cell">{formatAmount(row.nombreMateriels)}</td>
+                        <td className="table-num-cell">{formatAmount(row.nombreJours)}</td>
+                        <td className="table-num-cell">{formatAmount(row.heuresMarche)}</td>
+                        <td className="table-num-cell">{formatAmount(row.consommationLH)}</td>
+                        <td className="table-num-cell">{formatAmount(row.consommationJournaliereL)}</td>
+                        <td>
+                          <b>{formatAmount(row.montantTotal)} DH</b>
+                        </td>
+                        <td>
+                          <button
+                            type="button"
+                            className="btn-sm line-view-btn inline-action-btn"
+                            onClick={() => openGasoilDetailModal(row)}
+                          >
+                            <FiEye aria-hidden="true" />
+                            <span>Consulter le détail</span>
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                    {filteredGasoilRows.length === 0 && (
+                      <tr>
+                        <td colSpan={10}>Aucune ligne Gasoil pour ce scope.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            <div className="budget-footer">
+              <div className="budget-footer-left">
+                <div className="budget-saved">
+                  Dernière sauvegarde: <b>{lastSavedAt || "-"}</b>
+                </div>
+              </div>
+              <div className="budget-footer-center">
+                <div>
+                  <b>Total scope :</b> {formatAmount(activeSectionScopeTotal)} DH
+                </div>
+                <div>
+                  <b>Total section :</b> {formatAmount(activeSectionTotal)} DH
+                </div>
+              </div>
+              <div className="budget-footer-right">
+                <button type="button" className="btn-sm btn-secondary" onClick={onSave}>
+                  Enregistrer
+                </button>{" "}
+                <button type="button" className="btn-sm" onClick={onValidate}>
+                  Valider
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {false && gasoilDetailLine && (
+          <div className="gasoil-modal-backdrop">
+            <div className="gasoil-modal">
+              <div className="gasoil-modal-header">
+                <h4>Détail des montants</h4>
+                <button
+                  type="button"
+                  className="btn-sm btn-secondary"
+                  onClick={() => {
+                    setShowGasoilDetailModal(false);
+                    setGasoilDetailLine(null);
+                  }}
+                >
+                  Fermer
+                </button>
+              </div>
+              <div className="gasoil-modal-grid">
+                <div className="gasoil-modal-card">
+                  <div className="gasoil-modal-kv">
+                    <span>Sous section</span>
+                    <b>{gasoilDetailLine.subsection || "-"}</b>
+                  </div>
+                  <div className="gasoil-modal-kv">
+                    <span>Article</span>
+                    <b>{gasoilDetailLine.article || "-"}</b>
+                  </div>
+                  <div className="gasoil-modal-kv">
+                    <span>Nombre de matériel</span>
+                    <b>{formatAmount(gasoilDetailLine.nombreMateriels)}</b>
+                  </div>
+                  <div className="gasoil-modal-kv">
+                    <span>Nbr jours/mois</span>
+                    <b>{formatAmount(gasoilDetailLine.nombreJours)}</b>
+                  </div>
+                </div>
+                <div className="gasoil-modal-card">
+                  <div className="gasoil-modal-kv">
+                    <span>Heures marche</span>
+                    <b>{formatAmount(gasoilDetailLine.heuresMarche)}</b>
+                  </div>
+                  <div className="gasoil-modal-kv">
+                    <span>Consommation L/H</span>
+                    <b>{formatAmount(gasoilDetailLine.consommationLH)}</b>
+                  </div>
+                  <div className="gasoil-modal-kv">
+                    <span>Consommation journalière en L</span>
+                    <b>{formatAmount(gasoilDetailLine.consommationJournaliereL)}</b>
+                  </div>
+                  <div className="gasoil-modal-kv">
+                    <span>Prix de L en DH</span>
+                    <b>{formatAmount(gasoilPricePerL || gasoilDetailLine.prixPerL)}</b>
+                  </div>
+                  <div className="gasoil-modal-total">
+                    <span>Détail des montants</span>
+                    <b>{formatAmount(gasoilDetailLine.montantTotal)} DH</b>
+                  </div>
+                </div>
+              </div>
+              <div className="gasoil-modal-formula">
+                Nombre jours/mois x Heures marche x Consommation L/H x Nombre de matériel x Prix de L en DH
+              </div>
+            </div>
+          </div>
+        )}
+        {showGasoilDetailModal && gasoilDetailLine && (
+          <div className="gasoil-modal-backdrop">
+            <div className="gasoil-modal gasoil-modal-detailed">
+              <div className="gasoil-modal-header">
+                <h4>Détail des montants</h4>
+                <button
+                  type="button"
+                  className="btn-sm btn-secondary"
+                  onClick={() => {
+                    setShowGasoilDetailModal(false);
+                    setGasoilDetailLine(null);
+                    setGasoilDetailActiveYear("");
+                  }}
+                >
+                  Fermer
+                </button>
+              </div>
+              <div className="gasoil-modal-grid gasoil-modal-grid-detailed">
+                <div className="gasoil-modal-card gasoil-modal-card-detailed">
+                  <h5>Nombre de matériel</h5>
+                  <div className="gasoil-modal-year-switch">
+                    {(gasoilDetailYears.length ? gasoilDetailYears : [Number(gasoilDetailActiveYear || new Date().getFullYear())]).map(
+                      (year) => (
+                        <button
+                          key={year}
+                          type="button"
+                          className={`btn-sm ${String(gasoilDetailActiveYear) === String(year) ? "" : "btn-secondary"}`}
+                          onClick={() => setGasoilDetailActiveYear(String(year))}
+                        >
+                          {year}
+                        </button>
+                      )
+                    )}
+                  </div>
+                  <table className="gasoil-modal-table">
+                    <tbody>
+                      {[0, 1, 2].map((rowIdx) => {
+                        const rowMonths = MONTHS.slice(rowIdx * 4, rowIdx * 4 + 4);
+                        return (
+                          <React.Fragment key={`gasoil-qty-row-${rowIdx}`}>
+                            <tr>
+                              {rowMonths.map((m) => (
+                                <th key={`gasoil-qty-head-${m.key}`}>{m.label}</th>
+                              ))}
+                            </tr>
+                            <tr>
+                              {rowMonths.map((m) => (
+                                <td key={`gasoil-qty-cell-${m.key}`}>
+                                  <input type="number" value={gasoilDetailModalQty[m.key] || ""} readOnly />
+                                </td>
+                              ))}
+                            </tr>
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="gasoil-modal-card gasoil-modal-card-detailed">
+                  <h5>Montant total</h5>
+                  <table className="gasoil-modal-table">
+                    <tbody>
+                      {[0, 1, 2].map((rowIdx) => {
+                        const rowMonths = MONTHS.slice(rowIdx * 4, rowIdx * 4 + 4);
+                        return (
+                          <React.Fragment key={`gasoil-amt-row-${rowIdx}`}>
+                            <tr>
+                              {rowMonths.map((m) => (
+                                <th key={`gasoil-amt-head-${m.key}`}>{m.label}</th>
+                              ))}
+                            </tr>
+                            <tr>
+                              {rowMonths.map((m) => {
+                                const monthAmount =
+                                  gasoilDetailMonthlyAmounts.find((x) => x.key === m.key)?.amount || 0;
+                                return (
+                                  <td key={`gasoil-amt-cell-${m.key}`}>
+                                    <span>{formatAmount(monthAmount)}</span>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          </React.Fragment>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <div className="gasoil-modal-meta">
+                    <div>
+                      <span>Heures marche</span>
+                      <b>{formatAmount(gasoilDetailLine.heuresMarche)}</b>
+                    </div>
+                    <div>
+                      <span>Consommation L/H</span>
+                      <b>{formatAmount(gasoilDetailLine.consommationLH)}</b>
+                    </div>
+                    <div>
+                      <span>Consommation journalière en L</span>
+                      <b>{formatAmount(gasoilDetailLine.consommationJournaliereL)}</b>
+                    </div>
+                    <div>
+                      <span>Prix de L en DH</span>
+                      <b>{formatAmount(gasoilPricePerL || gasoilDetailLine.prixPerL)}</b>
+                    </div>
+                  </div>
+                  <div className="gasoil-modal-total">
+                    <span>Montant total</span>
+                    <b>{formatAmount(gasoilDetailTotalAmount)} DH</b>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
+
   return (
     <div className="budget-page">
       <div className="budget-top-tabs">
@@ -1031,9 +1650,20 @@ export default function BudgetEditor() {
 
       <div className="budget-content">
         <div className="budget-sidebar">
-          <div className="budget-card-title">
-            <FiGrid aria-hidden="true" />
-            <span>Scopes</span>
+          <div className="budget-card-title budget-card-title-with-action">
+            <div className="budget-card-title-main">
+              <FiGrid aria-hidden="true" />
+              <span>Scopes</span>
+            </div>
+            <button
+              type="button"
+              className="btn-sm btn-secondary icon-btn scope-edit-btn"
+              onClick={goToProjectEditor}
+              title="Modifier le projet"
+              aria-label="Modifier le projet"
+            >
+              <FiEdit aria-hidden="true" />
+            </button>
           </div>
           {!!activeScope && (
             <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 10 }}>
@@ -1051,7 +1681,7 @@ export default function BudgetEditor() {
                 </div>
                 <div style={{ fontSize: 12, opacity: 0.85 }}>
                   Scope {activeScopeIndex + 1} / {scopes.length} —{" "}
-                  <b>{formatAmount(activeScope.total_scope)} DH</b>
+                  <b>{formatAmount(activeSectionScopeTotal)} DH</b>
                 </div>
               </div>
               <button
@@ -1086,7 +1716,7 @@ export default function BudgetEditor() {
               >
                 <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
                   <span>{z.nom}</span>
-                  <b>{formatAmount(z.total_scope)} DH</b>
+                  <b>{formatAmount(getSectionScopeTotal(z, activeSection))} DH</b>
                 </div>
               </button>
             ))}
@@ -1413,10 +2043,10 @@ export default function BudgetEditor() {
             </div>
             <div className="budget-footer-center">
               <div>
-                <b>Total scope :</b> {formatAmount(totalScope)} DH
+                <b>Total scope :</b> {formatAmount(activeSectionScopeTotal)} DH
               </div>
               <div>
-                <b>Total section :</b> {formatAmount(totalSection)} DH
+                <b>Total section :</b> {formatAmount(activeSectionTotal)} DH
               </div>
             </div>
             <div className="budget-footer-right">
@@ -1435,18 +2065,21 @@ export default function BudgetEditor() {
           style={{
             position: "fixed",
             inset: 0,
-            background: "rgba(0,0,0,0.5)",
+            background: "rgba(7, 15, 43, 0.58)",
             display: "flex",
             alignItems: "center",
             justifyContent: "center",
-            zIndex: 9999,
+            zIndex: 10000,
+            padding: 16,
           }}
         >
           <div
             style={{
-              background: "#f4f7ff",
-              borderRadius: 16,
-              width: "min(1060px, 97vw)",
+              width: "min(1040px, 96vw)",
+              background: "linear-gradient(180deg, #eff5ff 0%, #ffffff 100%)",
+              borderRadius: 20,
+              border: "1px solid #dbe7fb",
+              boxShadow: "0 24px 60px rgba(8, 15, 43, 0.28)",
               padding: 20,
             }}
           >
@@ -1454,16 +2087,25 @@ export default function BudgetEditor() {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
               <div
                 style={{
-                  background: "#39459e",
-                  borderRadius: 28,
+                  background: "#fff",
+                  borderRadius: 16,
+                  border: "1px solid #dbe7fb",
                   padding: 14,
-                  color: "#fff",
+                  color: "var(--text-main)",
                   minHeight: 560,
                   display: "flex",
                   flexDirection: "column",
                 }}
               >
-                <h4 style={{ marginTop: 0, textAlign: "center", fontSize: 30, fontWeight: 700 }}>
+                <h4
+                  style={{
+                    marginTop: 0,
+                    textAlign: "center",
+                    fontSize: 24,
+                    fontWeight: 700,
+                    color: "var(--primary-dark)",
+                  }}
+                >
                   {modalTitle}
                 </h4>
                 <div style={{ display: "flex", gap: 8, flexWrap: "wrap", justifyContent: "center", marginBottom: 10 }}>
@@ -1488,7 +2130,10 @@ export default function BudgetEditor() {
                     </button>
                   )}
                 </div>
-                <table className="table" style={{ background: "#fff", borderRadius: 8, overflow: "hidden", flex: 1 }}>
+                <table
+                  className="table"
+                  style={{ background: "#fff", borderRadius: 8, overflow: "hidden", flex: 1 }}
+                >
                   <tbody>
                     {[0, 1, 2].map((rowIdx) => {
                       const rowMonths = MONTHS.slice(rowIdx * 4, rowIdx * 4 + 4);
@@ -1539,19 +2184,31 @@ export default function BudgetEditor() {
               </div>
               <div
                 style={{
-                  background: "#39459e",
-                  borderRadius: 28,
+                  background: "#fff",
+                  borderRadius: 16,
+                  border: "1px solid #dbe7fb",
                   padding: 14,
-                  color: "#fff",
+                  color: "var(--text-main)",
                   minHeight: 560,
                   display: "flex",
                   flexDirection: "column",
                 }}
               >
-                <h4 style={{ marginTop: 0, textAlign: "center", fontSize: 30, fontWeight: 700 }}>
+                <h4
+                  style={{
+                    marginTop: 0,
+                    textAlign: "center",
+                    fontSize: 24,
+                    fontWeight: 700,
+                    color: "var(--primary-dark)",
+                  }}
+                >
                   Détails des montants
                 </h4>
-                <table className="table" style={{ background: "#fff", borderRadius: 8, overflow: "hidden", flex: 1 }}>
+                <table
+                  className="table"
+                  style={{ background: "#fff", borderRadius: 8, overflow: "hidden", flex: 1 }}
+                >
                   <tbody>
                     {[0, 1, 2].map((rowIdx) => {
                       const rowMonths = MONTHS.slice(rowIdx * 4, rowIdx * 4 + 4);
@@ -1574,10 +2231,10 @@ export default function BudgetEditor() {
                     })}
                   </tbody>
                 </table>
-                <div style={{ textAlign: "center", marginTop: 8 }}>
+                <div style={{ textAlign: "center", marginTop: 8, color: "var(--primary-dark)" }}>
                   Total montants brut: <b>{formatAmount(grossInModal)} DH</b>
                 </div>
-                <div style={{ textAlign: "center" }}>
+                <div style={{ textAlign: "center", color: "var(--primary-dark)" }}>
                   Total montants net: <b>{formatAmount(netInModal)} DH</b>
                 </div>
               </div>
