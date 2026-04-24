@@ -16,6 +16,11 @@ const parseLocaleNumber = (value) => {
 
 const splitCsvLine = (line) => String(line || "").split(";").map((part) => part.trim());
 
+const cloneDetailsMensuels = (details) =>
+  Array.isArray(details)
+    ? details.map((detail) => ({ ...(detail || {}) }))
+    : [];
+
 export const parseGasoilCatalogueCsv = (csvText) => {
   const lines = String(csvText || "")
     .split(/\r?\n/)
@@ -56,11 +61,16 @@ export const collectSectionLines = (scope, sectionCode) => {
         subsection: sousSection.nom,
         article: line.designation,
         unit: line.unite,
-        nombreJours: Number(line.nombre_jours ?? 1),
+        nombreJours:
+          Number(line.nombre_jours ?? 0) ||
+          (Array.isArray(line.details_mensuels) && line.details_mensuels.length
+            ? line.details_mensuels.reduce((sum, detail) => sum + Number(detail?.quantite || 0), 0)
+            : 0) ||
+          1,
         qty: Number(line.quantite_globale ?? 0),
         pu: Number(line.prix_unitaire ?? 0),
         total: Number(line.montant_total ?? 0),
-        detailsMensuels: line.details_mensuels || [],
+        detailsMensuels: cloneDetailsMensuels(line.details_mensuels),
         heuresMarche: Number(line.heures_marche ?? 0),
         consommationLH: Number(line.consommation_l_h ?? 0),
       });
@@ -90,12 +100,12 @@ export const calculateGasoilRow = (materialLine, gasoilCatalogue, pricePerL) => 
   const nombreMateriels = Number(materialLine?.qty || 0);
   const nombreJours = Number(materialLine?.nombreJours || 1);
   const consommationJournaliereL = heuresMarche * consommationLH;
-  const detailsMensuels = Array.isArray(materialLine?.detailsMensuels) ? materialLine.detailsMensuels : [];
+  const detailsMensuels = cloneDetailsMensuels(materialLine?.detailsMensuels);
   const basePrice = Number(pricePerL || 0);
   const montantTotal = detailsMensuels.length
     ? detailsMensuels.reduce(
         (sum, detail) =>
-          sum + Number(detail?.quantite || 0) * nombreJours * consommationJournaliereL * basePrice,
+          sum + Number(detail?.quantite || 0) * nombreMateriels * consommationJournaliereL * basePrice,
         0
       )
     : nombreJours * consommationJournaliereL * nombreMateriels * basePrice;
@@ -112,8 +122,13 @@ export const calculateGasoilRow = (materialLine, gasoilCatalogue, pricePerL) => 
     consommationJournaliereL,
     prixPerL: basePrice,
     montantTotal,
-    catalogueEntry,
-    materialLine,
+    catalogueEntry: catalogueEntry ? { ...catalogueEntry } : null,
+    materialLine: materialLine
+      ? {
+          ...materialLine,
+          detailsMensuels: cloneDetailsMensuels(materialLine.detailsMensuels),
+        }
+      : null,
     detailsMensuels,
   };
 };
@@ -121,7 +136,7 @@ export const calculateGasoilRow = (materialLine, gasoilCatalogue, pricePerL) => 
 export const deriveGasoilRows = (materialLines, gasoilCatalogue, pricePerL) =>
   (Array.isArray(materialLines) ? materialLines : [])
     .map((line) => calculateGasoilRow(line, gasoilCatalogue, pricePerL))
-    .filter((row) => row.article && (row.catalogueEntry || row.heuresMarche || row.consommationLH));
+    .filter((row) => row.article);
 
 export const sumGasoilRows = (rows) =>
   (Array.isArray(rows) ? rows : []).reduce((sum, row) => sum + Number(row?.montantTotal || 0), 0);
@@ -136,5 +151,5 @@ export const serializeGasoilRowToPayload = (row) => ({
   montant_total: Number(row?.montantTotal || 0),
   heures_marche: Number(row?.heuresMarche || 0),
   consommation_l_h: Number(row?.consommationLH || 0),
-  details_mensuels: Array.isArray(row?.detailsMensuels) ? row.detailsMensuels : [],
+  details_mensuels: cloneDetailsMensuels(row?.detailsMensuels),
 });

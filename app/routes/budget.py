@@ -184,9 +184,10 @@ def get_or_create_budget(project_id: int, db: Session = Depends(get_db)):
             .joinedload(budget_models.SousSection.lignes_otp)
             .joinedload(budget_models.LigneOTP.details_mensuels)
         )
-        .filter(
-            budget_models.Budget.projet_id == project_id,
-            budget_models.Budget.statut == "BROUILLON",
+        .filter(budget_models.Budget.projet_id == project_id)
+        .order_by(
+            budget_models.Budget.date_creation.desc(),
+            budget_models.Budget.id.desc(),
         )
         .first()
     )
@@ -194,10 +195,8 @@ def get_or_create_budget(project_id: int, db: Session = Depends(get_db)):
     wanted_scopes = parse_project_scopes(project.scope)
 
     if budget:
-        # sync robuste:
-        # - renommage par position (évite ancien nom + nouveau nom)
-        # - ajout des scopes manquants
-        # - suppression des scopes en trop uniquement s'ils sont vides
+        # Sync robuste sans recréer un nouveau budget si celui-ci a déjà été validé.
+        # On conserve le budget existant et on aligne seulement sa structure de scopes/sections.
         existing_scopes = sorted((budget.scopes or []), key=lambda s: s.id)
         changed = False
 

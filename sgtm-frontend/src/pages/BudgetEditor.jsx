@@ -92,16 +92,28 @@ const yearStateToDetails = (yearState = {}) =>
     }))
   );
 
-const maxQtyFromDetails = (details = []) => maxYearState(detailsToYearState(details));
+const sumMonthlyQty = (monthlyQty = {}) =>
+  MONTHS.reduce((sum, month) => sum + Number(monthlyQty?.[month.key] || 0), 0);
 
-const maxYearState = (yearState = {}) =>
-  Object.values(yearState).reduce((max, months) => {
-    const yearMax = MONTHS.reduce(
-      (monthMax, month) => Math.max(monthMax, Number(months?.[month.key] || 0)),
-      0
-    );
-    return Math.max(max, yearMax);
-  }, 0);
+const sumYearState = (yearState = {}) =>
+  Object.values(yearState).reduce((sum, months) => sum + sumMonthlyQty(months), 0);
+
+const cloneDetailsMensuels = (details) =>
+  Array.isArray(details)
+    ? details.map((detail) => ({ ...(detail || {}) }))
+    : [];
+
+const cloneGasoilRowSnapshot = (row) => ({
+  ...row,
+  catalogueEntry: row?.catalogueEntry ? { ...row.catalogueEntry } : null,
+  materialLine: row?.materialLine
+    ? {
+        ...row.materialLine,
+        detailsMensuels: cloneDetailsMensuels(row.materialLine.detailsMensuels),
+      }
+    : null,
+  detailsMensuels: cloneDetailsMensuels(row?.detailsMensuels),
+});
 
 const getYearsBetweenDates = (startDate, endDate) => {
   const start = startDate ? new Date(startDate) : null;
@@ -167,16 +179,15 @@ const SECTION_TAB_ICONS = {
 
 const TABLE_COLUMN_WIDTHS = ["18%", "24%", "10%", "10%", "12%", "12%", "14%", "10%"];
 const GASOIL_TABLE_COLUMN_WIDTHS = [
-  "8%",
   "12%",
-  "17%",
-  "10%",
-  "10%",
+  "18%",
+  "12%",
+  "12%",
   "10%",
   "10%",
   "12%",
-  "11%",
-  "10%",
+  "12%",
+  "12%",
 ];
 
 const parseUnitPrice = (value) => {
@@ -246,7 +257,7 @@ export default function BudgetEditor() {
   const [articlePickerOpen, setArticlePickerOpen] = useState(false);
   const articleWrapRef = useRef(null);
   const [unit, setUnit] = useState("");
-  const [nombreJours, setNombreJours] = useState("1");
+  const [quantite, setQuantite] = useState("1");
   const [pu, setPu] = useState("");
   const [remise, setRemise] = useState("");
   const [monthlyQtyByYear, setMonthlyQtyByYear] = useState({});
@@ -256,13 +267,14 @@ export default function BudgetEditor() {
   const [showMonthlyModal, setShowMonthlyModal] = useState(false);
   const [modalMode, setModalMode] = useState("create");
   const [editingLineId, setEditingLineId] = useState(null);
+  const [lineSectionOverride, setLineSectionOverride] = useState("");
   const lineFormRef = useRef({
     subsection: "",
     otpId: "",
     article: "",
     articleQuery: "",
     unit: "",
-    nombreJours: "1",
+    quantite: "1",
     pu: "",
     monthlyQtyByYear: {},
     monthlyQtyDraftByYear: {},
@@ -327,10 +339,11 @@ export default function BudgetEditor() {
       article,
       articleQuery,
       unit,
-      nombreJours,
+      quantite,
       pu,
       monthlyQtyByYear,
       monthlyQtyDraftByYear,
+      sectionCode: lineSectionOverride,
     };
   }, [
     subsection,
@@ -338,10 +351,11 @@ export default function BudgetEditor() {
     article,
     articleQuery,
     unit,
-    nombreJours,
+    quantite,
     pu,
     monthlyQtyByYear,
     monthlyQtyDraftByYear,
+    lineSectionOverride,
   ]);
 
   useEffect(() => {
@@ -475,11 +489,6 @@ export default function BudgetEditor() {
       setShowGasoilDetailModal(false);
     }
   }, [isGasoilSection]);
-
-  const materialSectionLines = useMemo(
-    () => collectSectionLines(activeScope, "MATERIEL"),
-    [activeScope]
-  );
   const materialSousSections = useMemo(
     () =>
       MATERIAL_SUBSECTIONS.filter((name) =>
@@ -511,26 +520,33 @@ export default function BudgetEditor() {
 
   const availableCatalogueOtps = isMaterialSection ? materialOtps : catalogueOtps;
 
+  const buildGasoilRowsForScope = useCallback(
+    (scope, pricePerL) => {
+      if (!scope) return [];
+      const basePrice = Number(pricePerL || 0);
+      const materialLines = collectSectionLines(scope, "MATERIEL");
+      return deriveGasoilRows(materialLines, gasoilCatalogue, basePrice).map(cloneGasoilRowSnapshot);
+    },
+    [gasoilCatalogue]
+  );
+
   const gasoilRows = useMemo(() => {
     if (!isGasoilSection) return [];
-    const basePrice = Number(gasoilPricePerL || 0);
-    return deriveGasoilRows(materialSectionLines, gasoilCatalogue, basePrice);
-  }, [gasoilCatalogue, gasoilPricePerL, isGasoilSection, materialSectionLines]);
+    return buildGasoilRowsForScope(activeScope, gasoilPricePerL);
+  }, [activeScope, buildGasoilRowsForScope, gasoilPricePerL, isGasoilSection]);
 
   const getSectionScopeTotal = useCallback(
     (scope, sectionCode) => {
       if (!scope) return 0;
       if (sectionCode === "GASOIL") {
-        const basePrice = Number(gasoilPriceByScopeId[scope.id] || 0);
-        const materialLines = collectSectionLines(scope, "MATERIEL");
-        return sumGasoilRows(deriveGasoilRows(materialLines, gasoilCatalogue, basePrice));
+        return sumGasoilRows(buildGasoilRowsForScope(scope, gasoilPriceByScopeId[scope.id]));
       }
       return collectSectionLines(scope, sectionCode).reduce(
         (sum, line) => sum + Number(line?.total || 0),
         0
       );
     },
-    [gasoilCatalogue, gasoilPriceByScopeId]
+    [buildGasoilRowsForScope, gasoilPriceByScopeId]
   );
 
   const activeSectionScopeTotal = useMemo(
@@ -556,8 +572,8 @@ export default function BudgetEditor() {
       ;
   }, [availableCatalogueOtps, articleQuery]);
 
-  const totalQtyFromMonthly = useMemo(() => {
-    return maxYearState(monthlyQtyByYear);
+  const totalDaysFromMonthly = useMemo(() => {
+    return sumYearState(monthlyQtyByYear);
   }, [monthlyQtyByYear]);
 
   const filteredGasoilRows = useMemo(() => {
@@ -565,7 +581,7 @@ export default function BudgetEditor() {
     const query = String(gasoilArticleQuery || "").trim().toLowerCase();
     if (!query) return gasoilRows;
     return gasoilRows.filter((row) =>
-      [row.article, row.subsection, row.codeOtp]
+      [row.article, row.subsection]
         .map((value) => String(value || "").toLowerCase())
         .join(" ")
         .includes(query)
@@ -593,14 +609,14 @@ export default function BudgetEditor() {
   );
 
   const gasoilDetailMonthlyAmounts = useMemo(() => {
-    const nombreJours = Math.min(30, Math.max(1, Number(gasoilDetailLine?.nombreJours || 1)));
     const heuresMarche = Number(gasoilDetailLine?.heuresMarche || 0);
     const consommationLH = Number(gasoilDetailLine?.consommationLH || 0);
-    const prixPerL = Number(gasoilPricePerL || gasoilDetailLine?.prixPerL || 0);
+    const nombreMateriels = Number(gasoilDetailLine?.nombreMateriels || 0);
+    const prixPerL = Number(gasoilDetailLine?.prixPerL || gasoilPricePerL || 0);
     const consommationJournaliereL = heuresMarche * consommationLH;
     return MONTHS.map((m) => {
       const qty = Number(gasoilDetailModalQty[m.key] || 0);
-      const amount = qty * nombreJours * consommationJournaliereL * prixPerL;
+      const amount = qty * nombreMateriels * consommationJournaliereL * prixPerL;
       return { ...m, qty, amount };
     });
   }, [gasoilDetailLine, gasoilDetailModalQty, gasoilPricePerL]);
@@ -616,18 +632,19 @@ export default function BudgetEditor() {
     const section = findSectionInScope(activeScope, activeSection);
     if (!section) return [];
 
-        const out = [];
+    const out = [];
     for (const ss of section.sous_sections || []) {
       for (const line of ss.lignes_otp || []) {
+        const detailsState = detailsToYearState(line.details_mensuels || []);
         out.push({
           id: line.id,
           otp: line.code_otp,
           subsection: ss.nom,
           article: line.designation,
           unit: line.unite,
-          nombreJours: line.nombre_jours ?? 1,
+          nombreJours: sumYearState(detailsState) || Number(line.nombre_jours ?? 0),
           pu: line.prix_unitaire,
-          qty: maxQtyFromDetails(line.details_mensuels || []) || Number(line.quantite_globale || 0),
+          qty: Number(line.quantite_globale ?? 0),
           total: line.montant_total,
           detailsQty: "consulter le détail",
           detailsAmounts: "consulter le détail",
@@ -665,8 +682,9 @@ export default function BudgetEditor() {
     lineFormRef.current.otpId = nextOtpId;
     setUnit(line.unit || "Jour/Mois");
     lineFormRef.current.unit = line.unit || "Jour/Mois";
-    setNombreJours(String(line.nombreJours ?? line.nombre_jours ?? 1));
-    lineFormRef.current.nombreJours = String(line.nombreJours ?? line.nombre_jours ?? 1);
+    const nextQuantite = String(line.qty ?? line.quantite_globale ?? 1);
+    setQuantite(nextQuantite);
+    lineFormRef.current.quantite = nextQuantite;
     setPu(line.pu != null ? String(line.pu) : "");
     lineFormRef.current.pu = line.pu != null ? String(line.pu) : "";
     setRemise("");
@@ -674,9 +692,9 @@ export default function BudgetEditor() {
 
   const currentLineGross = useMemo(() => {
     const p = Number(pu || 0);
-    const d = Math.min(30, Math.max(1, Number(nombreJours || 1)));
-    return totalQtyFromMonthly * p * d;
-  }, [totalQtyFromMonthly, pu, nombreJours]);
+    const q = Number(quantite || 0);
+    return totalDaysFromMonthly * p * q;
+  }, [totalDaysFromMonthly, pu, quantite]);
 
   const currentLineTotal = useMemo(() => {
     const r = Math.min(100, Math.max(0, Number(remise || 0)));
@@ -901,13 +919,19 @@ export default function BudgetEditor() {
       item.prix_unitaire_reference != null ? String(item.prix_unitaire_reference) : "";
   };
 
-  const ensureActiveSectionInScope = async () => {
+  const ensureActiveSectionInScope = async (sectionCode = activeSection) => {
     if (!activeScope) return null;
 
-    const existingSection = findSectionInScope(activeScope, activeSection);
+    const existingSection = findSectionInScope(activeScope, sectionCode);
     if (existingSection) return existingSection;
+    const wantedSection = normalize(sectionCode);
+    const wantedLabel = normalize(SECTION_OPTIONS.find((x) => x.code === sectionCode)?.label);
+    const targetCatalogueSection =
+      catalogueSections.find((c) => normalize(c.nom_section) === wantedSection) ||
+      catalogueSections.find((c) => normalize(c.nom_section) === wantedLabel) ||
+      null;
     const scopeCatalogueSectionId =
-      activeCatalogueSection?.id || activeScope?.section_id || catalogueSections[0]?.id;
+      targetCatalogueSection?.id || activeScope?.section_id || catalogueSections[0]?.id;
 
     if (!scopeCatalogueSectionId) {
       if (visibleSections.length > 0) {
@@ -916,7 +940,12 @@ export default function BudgetEditor() {
       return null;
     }
 
-    await assignSectionsToScope(activeScope.id, [scopeCatalogueSectionId]);
+    const existingCatalogueIds = (activeScope.sections || [])
+      .map((section) => section.catalogue_id)
+      .filter((id) => id != null);
+    const nextCatalogueIds = Array.from(new Set([...existingCatalogueIds, scopeCatalogueSectionId]));
+
+    await assignSectionsToScope(activeScope.id, nextCatalogueIds);
     const refreshedBudget = await refreshBudget();
     const refreshedScopes = Array.isArray(refreshedBudget?.scopes)
       ? refreshedBudget.scopes
@@ -924,7 +953,7 @@ export default function BudgetEditor() {
     const refreshedScope =
       refreshedScopes.find((scope) => scope.id === activeScope.id) || null;
 
-    return findSectionInScope(refreshedScope, activeSection);
+    return findSectionInScope(refreshedScope, sectionCode);
   };
 
   const handleAddSubmit = async (e) => {
@@ -935,6 +964,7 @@ export default function BudgetEditor() {
 
   const addLine = async (yearState = monthlyQtyByYear) => {
     const snapshot = lineFormRef.current || {};
+    const targetSectionCode = snapshot.sectionCode || activeSection;
     const effectiveYearState =
       snapshot.monthlyQtyByYear && Object.keys(snapshot.monthlyQtyByYear).length > 0
         ? snapshot.monthlyQtyByYear
@@ -943,24 +973,21 @@ export default function BudgetEditor() {
         : snapshot.monthlyQtyDraftByYear && Object.keys(snapshot.monthlyQtyDraftByYear).length > 0
         ? snapshot.monthlyQtyDraftByYear
         : monthlyQtyDraftByYear;
-    const q = Number(maxYearState(effectiveYearState) || 0);
+    const q = Number(parseFlexibleNumber(snapshot.quantite || quantite) || 0);
     const r = Math.min(100, Math.max(0, Number(remise || 0)));
     const effectiveArticle = String(snapshot.article || snapshot.articleQuery || article || articleQuery || "").trim();
     const effectiveUnit = "Jour/Mois";
     const effectivePu = parseFlexibleNumber(snapshot.pu || pu);
-    const effectiveNombreJours = Math.min(
-      30,
-      Math.max(1, Math.floor(Number(snapshot.nombreJours || nombreJours || 1)))
-    );
+    const effectiveNombreJours = Math.max(0, Math.floor(sumYearState(effectiveYearState)));
     const effectiveSubsection = String(snapshot.subsection || subsection || "").trim();
     const effectiveOtpId = String(snapshot.otpId || otpId || "");
 
     if (!effectiveSubsection || !effectiveArticle || !effectiveUnit || !Number.isFinite(effectivePu) || q <= 0) {
-      alert("Veuillez remplir l'article, le P.U et les détails des quantités.");
+      alert("Veuillez remplir l'article, la quantité, le P.U et les détails des jours.");
       return;
     }
-    if (!Number.isFinite(effectiveNombreJours) || effectiveNombreJours < 1 || effectiveNombreJours > 30) {
-      alert("Le nombre de jours doit être compris entre 1 et 30.");
+    if (!Number.isFinite(effectiveNombreJours) || effectiveNombreJours < 0) {
+      alert("Le total des jours doit être valide.");
       return;
     }
     if (Number.isNaN(r) || r < 0 || r > 100) {
@@ -974,7 +1001,7 @@ export default function BudgetEditor() {
     }
 
     try {
-      const section = await ensureActiveSectionInScope();
+      const section = await ensureActiveSectionInScope(targetSectionCode);
       if (!section) {
         alert("Section non disponible pour ce scope.");
         return;
@@ -1015,9 +1042,9 @@ export default function BudgetEditor() {
       setArticleQuery("");
       setOtpId("");
       setUnit("Jour/Mois");
-      setNombreJours("1");
+      setQuantite("1");
       lineFormRef.current.unit = "Jour/Mois";
-      lineFormRef.current.nombreJours = "1";
+      lineFormRef.current.quantite = "1";
       setPu("");
       setRemise("");
       setMonthlyQtyByYear({});
@@ -1025,6 +1052,7 @@ export default function BudgetEditor() {
       setModalYears([]);
       setActiveModalYear("");
       setEditingLineId(null);
+      setLineSectionOverride("");
       setArticlePickerOpen(false);
       setShowMonthlyModal(false);
     } catch (e) {
@@ -1049,9 +1077,15 @@ export default function BudgetEditor() {
       throw new Error("Veuillez sélectionner un scope.");
     }
 
-    const section = await ensureActiveSectionInScope();
+    const section = await ensureActiveSectionInScope("GASOIL");
     if (!section) {
       throw new Error("Section Gasoil non disponible.");
+    }
+
+    const rowsToPersist = gasoilRows.map((row) => cloneGasoilRowSnapshot(row));
+
+    if (!rowsToPersist.length) {
+      return;
     }
 
     const existingLines = collectSectionLines(activeScope, "GASOIL");
@@ -1059,25 +1093,13 @@ export default function BudgetEditor() {
       await deleteLigneOtp(line.id);
     }
 
-    const sectionRefresh = await refreshBudget();
-    const refreshedScope =
-      (Array.isArray(sectionRefresh?.scopes)
-        ? sectionRefresh.scopes.find((scope) => scope.id === activeScope.id)
-        : null) || activeScope;
-    const gasoilSection = findSectionInScope(refreshedScope, "GASOIL") || section;
-    if (!gasoilSection) {
-      throw new Error("Section Gasoil introuvable après synchronisation.");
-    }
-
-    if (!gasoilRows.length) {
-      return;
-    }
+    const gasoilSection = section;
 
     const subsectionsByName = new Map(
       (gasoilSection.sous_sections || []).map((item) => [item.nom, item])
     );
 
-    for (const row of gasoilRows) {
+    for (const row of rowsToPersist) {
       const targetSousSectionName = row.subsection || row.catalogueEntry?.sousSection || "Gasoil";
       let targetSousSection = subsectionsByName.get(targetSousSectionName) || null;
 
@@ -1096,9 +1118,12 @@ export default function BudgetEditor() {
       if (isGasoilSection) {
         await syncGasoilSectionToBudget();
       }
-      const updated = await recalculateBudget(budget.id);
-      setBudget(updated);
-      setScopes(Array.isArray(updated?.scopes) ? updated.scopes : []);
+      await recalculateBudget(budget.id);
+      const updated = await refreshBudget();
+      if (updated) {
+        setBudget(updated);
+        setScopes(Array.isArray(updated?.scopes) ? updated.scopes : []);
+      }
       setLastSavedAt(new Date().toLocaleString());
     } catch (e) {
       alert(e?.message || "Erreur API ❌");
@@ -1110,7 +1135,7 @@ export default function BudgetEditor() {
     try {
       const updated = await validateBudget(budget.id);
       setBudget(updated);
-      alert("Budget validé ✅");
+      alert("Section validée ✅");
     } catch (e) {
       alert(e?.message || "Erreur API ❌");
     }
@@ -1118,6 +1143,9 @@ export default function BudgetEditor() {
 
   const openMonthlyModal = (mode = "create", line = null) => {
     setModalMode(mode);
+    if (mode !== "edit") {
+      setLineSectionOverride("");
+    }
     setEditingLineId(mode === "edit" ? line?.id || null : null);
     const yearsFromLine = line
       ? Object.keys(detailsToYearState(line.detailsMensuels || {})).map(Number)
@@ -1155,22 +1183,22 @@ export default function BudgetEditor() {
   };
 
   const modalQty = monthlyQtyDraftByYear[Number(activeModalYear)] || emptyMonthlyQty();
-  const totalQtyInModal = maxYearState({ [activeModalYear]: modalQty });
+  const totalDaysInModal = sumYearState({ [activeModalYear]: modalQty });
   const monthlyAmountsInModal = MONTHS.map((m) => ({
     ...m,
     qty: Number(modalQty[m.key] || 0),
     amount:
-      Number(modalQty[m.key] || 0) * Number(pu || 0) * Math.min(30, Math.max(1, Number(nombreJours || 1))),
+      Number(modalQty[m.key] || 0) * Number(pu || 0) * Math.max(0, Number(quantite || 0)),
   }));
   const grossInModal = monthlyAmountsInModal.reduce((sum, m) => sum + m.amount, 0);
   const discountInModal = grossInModal * (Math.min(100, Math.max(0, Number(remise || 0))) / 100);
   const netInModal = Math.max(0, grossInModal - discountInModal);
   const modalTitle =
     modalMode === "view"
-      ? "Consulter les quantités"
+      ? "Consulter les jours/mois"
       : modalMode === "edit"
       ? "Modifier la ligne"
-      : "Remplir les quantités";
+      : "Remplir les jours/mois";
 
   const onConfirmMonthlyModal = async () => {
     if (modalMode === "edit" && editingLineId) {
@@ -1184,6 +1212,7 @@ export default function BudgetEditor() {
       setMonthlyQtyByYear(nextQty);
     }
     setShowMonthlyModal(false);
+    setLineSectionOverride("");
   };
 
   const addModalYearSlot = () => {
@@ -1215,6 +1244,7 @@ export default function BudgetEditor() {
   const onCancelMonthlyModal = () => {
     setEditingLineId(null);
     setShowMonthlyModal(false);
+    setLineSectionOverride("");
   };
 
   if (isGasoilSection) {
@@ -1365,11 +1395,10 @@ export default function BudgetEditor() {
                 </colgroup>
                 <thead>
                   <tr>
-                    <th>Code OTP</th>
                     <th>Sous section</th>
                     <th>Article</th>
                     <th>Nombre de matériels</th>
-                    <th>Nbr Jours/Mois</th>
+                    <th>Total des jours</th>
                     <th>Heures marche</th>
                     <th>Consommation L/H</th>
                     <th>Consommation journalière en L</th>
@@ -1388,7 +1417,6 @@ export default function BudgetEditor() {
                   <tbody>
                     {filteredGasoilRows.map((row) => (
                       <tr key={`${row.id}-${row.article}`}>
-                        <td className="table-num-cell">{row.codeOtp || "-"}</td>
                         <td>{row.subsection || "-"}</td>
                         <td>{row.article}</td>
                         <td className="table-num-cell">{formatAmount(row.nombreMateriels)}</td>
@@ -1400,20 +1428,22 @@ export default function BudgetEditor() {
                           <b>{formatAmount(row.montantTotal)} DH</b>
                         </td>
                         <td>
-                          <button
-                            type="button"
-                            className="btn-sm line-view-btn inline-action-btn"
-                            onClick={() => openGasoilDetailModal(row)}
-                          >
-                            <FiEye aria-hidden="true" />
-                            <span>Consulter le détail</span>
-                          </button>
+                          <div className="line-action-group">
+                            <button
+                              type="button"
+                              className="btn-sm line-view-btn inline-action-btn"
+                              onClick={() => openGasoilDetailModal(row)}
+                            >
+                              <FiEye aria-hidden="true" />
+                              <span>Consulter le détail</span>
+                            </button>
+                          </div>
                         </td>
                       </tr>
                     ))}
                     {filteredGasoilRows.length === 0 && (
                       <tr>
-                        <td colSpan={10}>Aucune ligne Gasoil pour ce scope.</td>
+                        <td colSpan={9}>Aucune ligne Gasoil pour ce scope.</td>
                       </tr>
                     )}
                   </tbody>
@@ -1474,11 +1504,11 @@ export default function BudgetEditor() {
                     <b>{gasoilDetailLine.article || "-"}</b>
                   </div>
                   <div className="gasoil-modal-kv">
-                    <span>Nombre de matériel</span>
+                    <span>Nombre jour</span>
                     <b>{formatAmount(gasoilDetailLine.nombreMateriels)}</b>
                   </div>
                   <div className="gasoil-modal-kv">
-                    <span>Nbr jours/mois</span>
+                    <span>Total des jours</span>
                     <b>{formatAmount(gasoilDetailLine.nombreJours)}</b>
                   </div>
                 </div>
@@ -1506,7 +1536,7 @@ export default function BudgetEditor() {
                 </div>
               </div>
               <div className="gasoil-modal-formula">
-                Nombre jours/mois x Heures marche x Consommation L/H x Nombre de matériel x Prix de L en DH
+                Nombre jour x Heures marche x Consommation L/H x Total des jours x Prix de L en DH
               </div>
             </div>
           </div>
@@ -1530,7 +1560,7 @@ export default function BudgetEditor() {
               </div>
               <div className="gasoil-modal-grid gasoil-modal-grid-detailed">
                 <div className="gasoil-modal-card gasoil-modal-card-detailed">
-                  <h5>Nombre de matériel</h5>
+                  <h5>Nombre jour</h5>
                   <div className="gasoil-modal-year-switch">
                     {(gasoilDetailYears.length ? gasoilDetailYears : [Number(gasoilDetailActiveYear || new Date().getFullYear())]).map(
                       (year) => (
@@ -1568,6 +1598,10 @@ export default function BudgetEditor() {
                       })}
                     </tbody>
                   </table>
+                  <div className="gasoil-modal-total" style={{ marginTop: 10 }}>
+                    <span>Total des jours</span>
+                    <b>{formatAmount(sumMonthlyQty(gasoilDetailModalQty))}</b>
+                  </div>
                 </div>
                 <div className="gasoil-modal-card gasoil-modal-card-detailed">
                   <h5>Montant total</h5>
@@ -1845,23 +1879,22 @@ export default function BudgetEditor() {
 
             <div className="budget-form-row budget-form-row-mid">
               <div className="budget-field-group">
-                <label className="budget-label">Nombre jours/mois</label>
+                <label className="budget-label">Quantité</label>
                 <input
                   type="number"
                   min={1}
-                  max={30}
-                  value={nombreJours}
+                  value={quantite}
                   onChange={(e) => {
                     const nextValue = e.target.value;
                     if (nextValue === '') {
-                      setNombreJours('');
-                      lineFormRef.current.nombreJours = '';
+                      setQuantite('');
+                      lineFormRef.current.quantite = '';
                       return;
                     }
-                    const nextNumber = Math.min(30, Math.max(1, Math.floor(Number(nextValue) || 1)));
+                    const nextNumber = Math.max(1, Math.floor(Number(nextValue) || 1));
                     const normalized = String(nextNumber);
-                    setNombreJours(normalized);
-                    lineFormRef.current.nombreJours = normalized;
+                    setQuantite(normalized);
+                    lineFormRef.current.quantite = normalized;
                   }}
                 />
               </div>
@@ -1871,19 +1904,19 @@ export default function BudgetEditor() {
             <div className="budget-details-row">
               <label className="budget-label budget-label-inline">
                 <FiTable aria-hidden="true" />
-                <span>Détails des quantités / montants</span>
+                <span>Détails des jours / montants</span>
               </label>
               <button type="button" className="btn-sm btn-secondary inline-action-btn" onClick={() => openMonthlyModal("create")}>
                 <FiEdit aria-hidden="true" />
-                <span>Remplir les détails</span>
+                <span>Remplir les jours/mois</span>
               </button>
             </div>
 
             <div className="budget-summary-bar">
               <div className="budget-summary-item">
                 <FiHash aria-hidden="true" />
-                <span>Quantité max</span>
-                <b>{formatAmount(totalQtyFromMonthly)}</b>
+                <span>Total des jours</span>
+                <b>{formatAmount(totalDaysFromMonthly)}</b>
               </div>
               <div className="budget-summary-item">
                 <FiTrendingUp aria-hidden="true" />
@@ -1938,7 +1971,7 @@ export default function BudgetEditor() {
                   <th>
                     <span className="budget-th-label">
                       <FiHash aria-hidden="true" />
-                      <span>Quantité max</span>
+                      <span>Quantité</span>
                     </span>
                   </th>
                   <th>
@@ -1950,7 +1983,7 @@ export default function BudgetEditor() {
                   <th>
                     <span className="budget-th-label">
                       <FiCalendar aria-hidden="true" />
-                      <span>Nombre jours/mois</span>
+                      <span>Nombre de jours</span>
                     </span>
                   </th>
                   <th>
@@ -1978,7 +2011,7 @@ export default function BudgetEditor() {
                       <td>{l.article}</td>
                   <td className="table-num-cell">{formatAmount(l.qty)}</td>
                   <td className="table-num-cell">{formatAmount(l.pu)}</td>
-                  <td className="table-num-cell">{formatAmount(l.nombreJours ?? 1)}</td>
+                  <td className="table-num-cell">{formatAmount(l.nombreJours ?? 0)}</td>
                   <td>
                     <b>{formatAmount(l.total)}</b>
                   </td>
@@ -2179,7 +2212,7 @@ export default function BudgetEditor() {
                   </tbody>
                 </table>
                 <div style={{ textAlign: "center", marginTop: 8 }}>
-                  Quantité max: <b>{formatAmount(totalQtyInModal)}</b>
+                  Total des jours: <b>{formatAmount(totalDaysInModal)}</b>
                 </div>
               </div>
               <div

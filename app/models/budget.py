@@ -31,7 +31,7 @@ class Scope(Base):
     id = Column(Integer, primary_key=True, index=True)
     nom = Column(String)
     total_scope = Column(Float, default=0.0)
-    
+
     budget_id = Column(Integer, ForeignKey("budgets.id"))
     budget = relationship("Budget", back_populates="scopes")
     section_id = Column(Integer, ForeignKey("catalogue_sections.id"), nullable=True)
