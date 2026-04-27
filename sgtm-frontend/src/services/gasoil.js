@@ -14,12 +14,29 @@ const parseLocaleNumber = (value) => {
   return Number.isFinite(parsed) ? parsed : 0;
 };
 
+const parseOptionalLocaleNumber = (value) => {
+  const raw = String(value ?? "").trim();
+  if (!raw) return null;
+  const parsed = Number(raw.replace(/\s+/g, "").replace(",", "."));
+  return Number.isFinite(parsed) ? parsed : null;
+};
+
 const splitCsvLine = (line) => String(line || "").split(";").map((part) => part.trim());
 
 const cloneDetailsMensuels = (details) =>
   Array.isArray(details)
     ? details.map((detail) => ({ ...(detail || {}) }))
     : [];
+
+const GASOIL_SOURCE_PREFIX = "MATSRC:";
+
+const encodeSourceMaterialLineId = (value) =>
+  value == null || value === "" ? "" : `${GASOIL_SOURCE_PREFIX}${String(value)}`;
+
+const decodeSourceMaterialLineId = (value) => {
+  const raw = String(value || "");
+  return raw.startsWith(GASOIL_SOURCE_PREFIX) ? raw.slice(GASOIL_SOURCE_PREFIX.length) : "";
+};
 
 export const parseGasoilCatalogueCsv = (csvText) => {
   const lines = String(csvText || "")
@@ -58,6 +75,7 @@ export const collectSectionLines = (scope, sectionCode) => {
       out.push({
         id: line.id,
         codeOtp: line.code_otp,
+        sourceMaterialLineId: decodeSourceMaterialLineId(line.code_otp),
         subsection: sousSection.nom,
         article: line.designation,
         unit: line.unite,
@@ -68,7 +86,7 @@ export const collectSectionLines = (scope, sectionCode) => {
             : 0) ||
           1,
         qty: Number(line.quantite_globale ?? 0),
-        pu: Number(line.prix_unitaire ?? 0),
+        pu: line.prix_unitaire == null ? null : Number(line.prix_unitaire),
         total: Number(line.montant_total ?? 0),
         detailsMensuels: cloneDetailsMensuels(line.details_mensuels),
         heuresMarche: Number(line.heures_marche ?? 0),
@@ -76,7 +94,7 @@ export const collectSectionLines = (scope, sectionCode) => {
       });
     }
   }
-  return out;
+  return out.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
 };
 
 const getCatalogueEntry = (materialLine, gasoilCatalogue) => {
@@ -101,7 +119,8 @@ export const calculateGasoilRow = (materialLine, gasoilCatalogue, pricePerL) => 
   const nombreJours = Number(materialLine?.nombreJours || 1);
   const consommationJournaliereL = heuresMarche * consommationLH;
   const detailsMensuels = cloneDetailsMensuels(materialLine?.detailsMensuels);
-  const basePrice = Number(pricePerL || 0);
+  const parsedPrice = parseOptionalLocaleNumber(pricePerL);
+  const basePrice = parsedPrice ?? 0;
   const montantTotal = detailsMensuels.length
     ? detailsMensuels.reduce(
         (sum, detail) =>
@@ -120,8 +139,9 @@ export const calculateGasoilRow = (materialLine, gasoilCatalogue, pricePerL) => 
     heuresMarche,
     consommationLH,
     consommationJournaliereL,
-    prixPerL: basePrice,
+    prixPerL: parsedPrice,
     montantTotal,
+    sourceMaterialLineId: materialLine?.id != null ? String(materialLine.id) : "",
     catalogueEntry: catalogueEntry ? { ...catalogueEntry } : null,
     materialLine: materialLine
       ? {
@@ -142,12 +162,13 @@ export const sumGasoilRows = (rows) =>
   (Array.isArray(rows) ? rows : []).reduce((sum, row) => sum + Number(row?.montantTotal || 0), 0);
 
 export const serializeGasoilRowToPayload = (row) => ({
-  code_otp: row?.codeOtp || "-",
+  code_otp: encodeSourceMaterialLineId(row?.sourceMaterialLineId || row?.materialLine?.id || row?.id || row?.codeOtp || "-"),
   designation: row?.article || "",
   unite: "L",
   nombre_jours: Number(row?.nombreJours || 1),
   quantite_globale: Number(row?.nombreMateriels || 0),
-  prix_unitaire: Number(row?.prixPerL || 0),
+  prix_unitaire:
+    row?.prixPerL === "" || row?.prixPerL == null ? null : Number(row?.prixPerL),
   montant_total: Number(row?.montantTotal || 0),
   heures_marche: Number(row?.heuresMarche || 0),
   consommation_l_h: Number(row?.consommationLH || 0),

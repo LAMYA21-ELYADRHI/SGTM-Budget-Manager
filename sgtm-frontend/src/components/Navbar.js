@@ -40,12 +40,12 @@ const Navbar = () => {
             <ul className="nav-burger-menu">
               <li>
                 <NavLink to="/mes-projets" onClick={closeMenu}>
-                  Mes projets
+                  Réalisations majeures
                 </NavLink>
               </li>
               <li>
                 <NavLink to="/projects" onClick={closeMenu}>
-                  Vos budgets
+                  Mes budgets
                 </NavLink>
               </li>
               <li>

@@ -37,6 +37,8 @@ with engine.begin() as conn:
         conn.execute(text("ALTER TABLE projects ADD COLUMN scope_start_date DATE NULL"))
     if "scope_end_date" not in col_names:
         conn.execute(text("ALTER TABLE projects ADD COLUMN scope_end_date DATE NULL"))
+    if "market_amount" not in col_names:
+        conn.execute(text("ALTER TABLE projects ADD COLUMN market_amount INTEGER NOT NULL DEFAULT 0"))
     scope_cols = conn.execute(text("PRAGMA table_info(scopes)")).fetchall()
     scope_col_names = {row[1] for row in scope_cols}
     if "section_id" not in scope_col_names:

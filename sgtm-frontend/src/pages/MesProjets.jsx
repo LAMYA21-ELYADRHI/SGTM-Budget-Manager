@@ -41,13 +41,13 @@ export default function MesProjets() {
   return (
     <div className="showcase-page">
       <div className="showcase-header">
-        <h1>Mes projets</h1>
+        <h1>Réalisations majeures</h1>
         <button
           type="button"
           className="next-budgets-btn"
           onClick={() => navigate("/projects")}
-          aria-label="Aller vers Vos budgets"
-          title="Aller vers Vos budgets"
+          aria-label="Aller vers Mes budgets"
+          title="Aller vers Mes budgets"
         >
           <span>Mes budgets</span>
           <span className="arrow">→</span>

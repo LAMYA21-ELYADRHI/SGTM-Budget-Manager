@@ -65,7 +65,12 @@ class SousSection(Base):
     section_id = Column(Integer, ForeignKey("sections_budgetaires.id"))
     section = relationship("SectionBudgetaire", back_populates="sous_sections")
     
-    lignes_otp = relationship("LigneOTP", back_populates="sous_section", cascade="all, delete-orphan")
+    lignes_otp = relationship(
+        "LigneOTP",
+        back_populates="sous_section",
+        cascade="all, delete-orphan",
+        order_by=lambda: LigneOTP.id.desc(),
+    )
 
 
 # ==========================================

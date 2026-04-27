@@ -24,6 +24,7 @@ class Project(Base):
     scope = Column(String)                # Scopes
 
     project_type = Column(String)         # Type projet
+    market_amount = Column(Integer, default=0)  # Montant de marché
     scope_date = Column(Date)             # (legacy) Date scope
     scope_start_date = Column(Date, nullable=True)  # Date début scope
     scope_end_date = Column(Date, nullable=True)    # Date fin scope

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+﻿import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import "../styles.css";
 import {
@@ -47,6 +47,7 @@ import {
 } from "../constants/sections";
 import {
   collectSectionLines,
+  calculateGasoilRow,
   deriveGasoilRows,
   parseGasoilCatalogueCsv,
   serializeGasoilRowToPayload,
@@ -103,6 +104,13 @@ const cloneDetailsMensuels = (details) =>
     ? details.map((detail) => ({ ...(detail || {}) }))
     : [];
 
+const clampMonthlyQty = (value) => {
+  if (value === "" || value == null) return "";
+  const parsed = Math.floor(Number(value));
+  if (!Number.isFinite(parsed)) return "";
+  return String(Math.min(26, Math.max(0, parsed)));
+};
+
 const cloneGasoilRowSnapshot = (row) => ({
   ...row,
   catalogueEntry: row?.catalogueEntry ? { ...row.catalogueEntry } : null,
@@ -136,6 +144,9 @@ const normalize = (s) =>
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[_\s]+/g, "")
     .toUpperCase();
+
+const getGasoilSourceId = (row) =>
+  String(row?.sourceMaterialLineId || row?.materialLine?.id || row?.sourceId || "").trim();
 
 const findSectionInScope = (scope, activeSectionCode) => {
   const wanted = normalize(activeSectionCode);
@@ -179,14 +190,15 @@ const SECTION_TAB_ICONS = {
 
 const TABLE_COLUMN_WIDTHS = ["18%", "24%", "10%", "10%", "12%", "12%", "14%", "10%"];
 const GASOIL_TABLE_COLUMN_WIDTHS = [
-  "12%",
-  "18%",
-  "12%",
-  "12%",
+  "10%",
+  "16%",
   "10%",
   "10%",
-  "12%",
-  "12%",
+  "10%",
+  "10%",
+  "11%",
+  "11%",
+  "10%",
   "12%",
 ];
 
@@ -205,6 +217,13 @@ const formatAmount = (value) =>
     minimumFractionDigits: 2,
     maximumFractionDigits: 2,
   }).format(Number(value || 0));
+
+const formatOptionalAmount = (value) => {
+  if (value === "" || value == null) return "";
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric) || numeric === 0) return "";
+  return formatAmount(numeric);
+};
 
 const parseMaterialCatalogueCsv = (csvText) =>
   String(csvText || "")
@@ -244,11 +263,11 @@ export default function BudgetEditor() {
   const [materialCatalogue, setMaterialCatalogue] = useState([]);
   const [gasoilCatalogue, setGasoilCatalogue] = useState([]);
   const [gasoilPricePerL, setGasoilPricePerL] = useState("");
-  const [gasoilPriceByScopeId, setGasoilPriceByScopeId] = useState({});
   const [gasoilArticleQuery, setGasoilArticleQuery] = useState("");
   const [gasoilDetailLine, setGasoilDetailLine] = useState(null);
   const [gasoilDetailActiveYear, setGasoilDetailActiveYear] = useState("");
   const [showGasoilDetailModal, setShowGasoilDetailModal] = useState(false);
+  const [inlineLineDrafts, setInlineLineDrafts] = useState({});
 
   const [subsection, setSubsection] = useState("");
   const [otpId, setOtpId] = useState("");
@@ -283,6 +302,30 @@ export default function BudgetEditor() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [lastSavedAt, setLastSavedAt] = useState("");
+
+  const getInlineLineValue = useCallback(
+    (lineId, field, fallback) => inlineLineDrafts?.[lineId]?.[field] ?? fallback,
+    [inlineLineDrafts]
+  );
+
+  const setInlineLineField = useCallback((lineId, field, value) => {
+    setInlineLineDrafts((prev) => ({
+      ...prev,
+      [lineId]: {
+        ...(prev[lineId] || {}),
+        [field]: value,
+      },
+    }));
+  }, []);
+
+  const clearInlineLineDraft = useCallback((lineId) => {
+    setInlineLineDrafts((prev) => {
+      if (!prev[lineId]) return prev;
+      const next = { ...prev };
+      delete next[lineId];
+      return next;
+    });
+  }, []);
 
   const refreshBudget = async () => {
     setLoading(true);
@@ -450,16 +493,10 @@ export default function BudgetEditor() {
     );
   }, [activeScope, projectScopeList]);
 
-  const activeGasoilPricePerL = useMemo(() => {
-    if (!activeScope) return "";
-    const saved = gasoilPriceByScopeId[activeScope.id];
-    return saved != null ? String(saved) : "";
-  }, [activeScope, gasoilPriceByScopeId]);
-
   useEffect(() => {
     if (activeSection !== "GASOIL") return;
-    setGasoilPricePerL(activeGasoilPricePerL);
-  }, [activeGasoilPricePerL, activeSection]);
+    setGasoilPricePerL("");
+  }, [activeSection, activeScopeId]);
 
   const scopeYears = useMemo(() => {
     const start = activeProjectScope?.date_debut || project?.scope_start_date || project?.start_date;
@@ -521,11 +558,60 @@ export default function BudgetEditor() {
   const availableCatalogueOtps = isMaterialSection ? materialOtps : catalogueOtps;
 
   const buildGasoilRowsForScope = useCallback(
-    (scope, pricePerL) => {
+    (scope, fallbackPricePerL = "") => {
       if (!scope) return [];
-      const basePrice = Number(pricePerL || 0);
       const materialLines = collectSectionLines(scope, "MATERIEL");
-      return deriveGasoilRows(materialLines, gasoilCatalogue, basePrice).map(cloneGasoilRowSnapshot);
+      const draftRows = deriveGasoilRows(materialLines, gasoilCatalogue, fallbackPricePerL);
+      const savedRows = collectSectionLines(scope, "GASOIL");
+      const savedRowsBySourceId = new Map();
+      const legacySavedRows = [];
+
+      savedRows.forEach((savedRow) => {
+        const sourceId = getGasoilSourceId(savedRow);
+        if (sourceId) {
+          savedRowsBySourceId.set(sourceId, savedRow);
+        } else {
+          legacySavedRows.push(savedRow);
+        }
+      });
+
+      let legacyCursor = 0;
+      return draftRows.map((draftRow) => {
+        const sourceId = getGasoilSourceId(draftRow);
+        const savedRow =
+          savedRowsBySourceId.get(sourceId) ||
+          legacySavedRows[legacyCursor] ||
+          null;
+        if (!savedRowsBySourceId.get(sourceId) && legacySavedRows[legacyCursor]) {
+          legacyCursor += 1;
+        }
+        if (savedRow) {
+          const preservedPriceRaw = savedRow?.pu ?? null;
+          const preservedPrice =
+            preservedPriceRaw === "" || preservedPriceRaw == null ? null : Number(preservedPriceRaw);
+          return cloneGasoilRowSnapshot({
+            ...draftRow,
+            id: savedRow.id || draftRow.id,
+            isPersisted: true,
+            prixPerL: preservedPrice,
+            montantTotal: Number(savedRow?.total ?? draftRow.montantTotal ?? 0),
+            nombreMateriels: Number(savedRow?.qty ?? draftRow.nombreMateriels ?? 0),
+            nombreJours: Number(savedRow?.nombreJours ?? draftRow.nombreJours ?? 0),
+            sourceMaterialLineId: sourceId || savedRow?.sourceMaterialLineId || "",
+          });
+        }
+
+        const priceForNewRow =
+          fallbackPricePerL === "" || fallbackPricePerL == null ? null : Number(fallbackPricePerL);
+        const recalculated = calculateGasoilRow(draftRow.materialLine, gasoilCatalogue, priceForNewRow);
+        return cloneGasoilRowSnapshot({
+          ...recalculated,
+          id: draftRow.id,
+          isPersisted: false,
+          prixPerL: priceForNewRow,
+          sourceMaterialLineId: sourceId,
+        });
+      });
     },
     [gasoilCatalogue]
   );
@@ -539,14 +625,14 @@ export default function BudgetEditor() {
     (scope, sectionCode) => {
       if (!scope) return 0;
       if (sectionCode === "GASOIL") {
-        return sumGasoilRows(buildGasoilRowsForScope(scope, gasoilPriceByScopeId[scope.id]));
+        return sumGasoilRows(buildGasoilRowsForScope(scope, gasoilPricePerL));
       }
       return collectSectionLines(scope, sectionCode).reduce(
         (sum, line) => sum + Number(line?.total || 0),
         0
       );
     },
-    [buildGasoilRowsForScope, gasoilPriceByScopeId]
+    [buildGasoilRowsForScope, gasoilPricePerL]
   );
 
   const activeSectionScopeTotal = useMemo(
@@ -612,7 +698,7 @@ export default function BudgetEditor() {
     const heuresMarche = Number(gasoilDetailLine?.heuresMarche || 0);
     const consommationLH = Number(gasoilDetailLine?.consommationLH || 0);
     const nombreMateriels = Number(gasoilDetailLine?.nombreMateriels || 0);
-    const prixPerL = Number(gasoilDetailLine?.prixPerL || gasoilPricePerL || 0);
+    const prixPerL = Number(gasoilDetailLine?.prixPerL ?? gasoilPricePerL ?? 0);
     const consommationJournaliereL = heuresMarche * consommationLH;
     return MONTHS.map((m) => {
       const qty = Number(gasoilDetailModalQty[m.key] || 0);
@@ -652,7 +738,8 @@ export default function BudgetEditor() {
         });
       }
     }
-    return out;
+    // Les lignes les plus récentes doivent remonter en premier dans le tableau.
+    return out.sort((a, b) => Number(b.id || 0) - Number(a.id || 0));
   }, [activeScope, activeSection, isGasoilSection]);
 
   const duplicateRow = async (lineId) => {
@@ -727,6 +814,61 @@ export default function BudgetEditor() {
     ).sort((a, b) => a - b);
     setGasoilDetailActiveYear(String(detailYears[0] || new Date().getFullYear()));
     setShowGasoilDetailModal(true);
+  };
+
+  const saveInlineLineEdit = async (sectionCode, line) => {
+    if (!line?.id) return;
+
+    const draft = inlineLineDrafts[line.id] || {};
+    const isGasoil = sectionCode === "GASOIL";
+    const nextQty = Math.max(1, Math.floor(Number(draft.qty ?? line.qty ?? line.quantite_globale ?? 1) || 1));
+    const nextPu = Number(draft.pu ?? line.pu ?? line.prixPerL ?? 0);
+    const nextHeuresMarche = Number(draft.heuresMarche ?? line.heuresMarche ?? 0);
+    const nextConsommationLH = Number(draft.consommationLH ?? line.consommationLH ?? 0);
+
+    try {
+      if (isGasoil) {
+        const pricePerLRaw = draft.prixPerL ?? line.prixPerL ?? gasoilPricePerL;
+        const pricePerL =
+          pricePerLRaw === "" || pricePerLRaw == null ? null : Number(pricePerLRaw);
+        const nombreMateriels = Number(line.nombreMateriels || 0);
+        const nombreJours = Number(line.nombreJours || 0);
+        const consommationJournaliereL = nextHeuresMarche * nextConsommationLH;
+        const montantTotal = nombreJours * consommationJournaliereL * nombreMateriels * (pricePerL ?? 0);
+
+        await updateLigneOtp(line.id, {
+          code_otp: line.codeOtp || line.otp || "-",
+          designation: line.article || "",
+          unite: "L",
+          nombre_jours: nombreJours,
+          quantite_globale: nombreMateriels,
+          prix_unitaire: pricePerL,
+          montant_total: montantTotal,
+          heures_marche: nextHeuresMarche,
+          consommation_l_h: nextConsommationLH,
+          details_mensuels: cloneDetailsMensuels(line.detailsMensuels),
+        });
+      } else {
+        const nombreJours = Number(line.nombreJours || 0);
+        const montantTotal = nombreJours * nextQty * nextPu;
+
+        await updateLigneOtp(line.id, {
+          code_otp: line.otp || line.codeOtp || "-",
+          designation: line.article || "",
+          unite: line.unit || "Jour/Mois",
+          quantite_globale: nextQty,
+          prix_unitaire: nextPu,
+          montant_total: montantTotal,
+          nombre_jours: nombreJours,
+          details_mensuels: cloneDetailsMensuels(line.detailsMensuels),
+        });
+      }
+
+      clearInlineLineDraft(line.id);
+      await refreshBudget();
+    } catch (e) {
+      alert(e?.message || "Erreur API ❌");
+    }
   };
 
   const goPrevScope = () => {
@@ -870,14 +1012,10 @@ export default function BudgetEditor() {
       const nextOtpId = String(exact.id);
       setOtpId(nextOtpId);
       lineFormRef.current.otpId = nextOtpId;
-      if (!article) {
-        setArticle(exact.designation || "");
-        lineFormRef.current.article = exact.designation || "";
-      }
-      if (!articleQuery) {
-        setArticleQuery(exact.designation || "");
-        lineFormRef.current.articleQuery = exact.designation || "";
-      }
+      setArticle(exact.designation || "");
+      lineFormRef.current.article = exact.designation || "";
+      setArticleQuery(exact.designation || "");
+      lineFormRef.current.articleQuery = exact.designation || "";
       if (!unit) {
         setUnit("Jour/Mois");
         lineFormRef.current.unit = "Jour/Mois";
@@ -893,13 +1031,24 @@ export default function BudgetEditor() {
             ? String(exact.prix_unitaire_reference)
             : "";
       }
-    } else {
+    } else if (!isMaterialSection) {
       setOtpId("");
       lineFormRef.current.otpId = "";
       setArticle(value);
       lineFormRef.current.article = value;
       setArticleQuery(value);
       lineFormRef.current.articleQuery = value;
+    } else {
+      setOtpId("");
+      lineFormRef.current.otpId = "";
+      setArticle("");
+      lineFormRef.current.article = "";
+      if (!String(value || "").trim()) {
+        setUnit("");
+        lineFormRef.current.unit = "";
+        setPu("");
+        lineFormRef.current.pu = "";
+      }
     }
   };
 
@@ -975,7 +1124,7 @@ export default function BudgetEditor() {
         : monthlyQtyDraftByYear;
     const q = Number(parseFlexibleNumber(snapshot.quantite || quantite) || 0);
     const r = Math.min(100, Math.max(0, Number(remise || 0)));
-    const effectiveArticle = String(snapshot.article || snapshot.articleQuery || article || articleQuery || "").trim();
+    const effectiveArticle = String(snapshot.article || article || "").trim();
     const effectiveUnit = "Jour/Mois";
     const effectivePu = parseFlexibleNumber(snapshot.pu || pu);
     const effectiveNombreJours = Math.max(0, Math.floor(sumYearState(effectiveYearState)));
@@ -986,8 +1135,16 @@ export default function BudgetEditor() {
       alert("Veuillez remplir l'article, la quantité, le P.U et les détails des jours.");
       return;
     }
+    if (isMaterialSection && !availableCatalogueOtps.find((o) => String(o.id) === effectiveOtpId)) {
+      alert("Veuillez choisir un article existant dans la liste.");
+      return;
+    }
     if (!Number.isFinite(effectiveNombreJours) || effectiveNombreJours < 0) {
       alert("Le total des jours doit être valide.");
+      return;
+    }
+    if (effectiveNombreJours <= 0) {
+      alert("Veuillez remplir au moins une case dans les jours/mois.");
       return;
     }
     if (Number.isNaN(r) || r < 0 || r > 100) {
@@ -1082,7 +1239,23 @@ export default function BudgetEditor() {
       throw new Error("Section Gasoil non disponible.");
     }
 
-    const rowsToPersist = gasoilRows.map((row) => cloneGasoilRowSnapshot(row));
+    const rowsToPersist = gasoilRows.map((row) => {
+      const draft = inlineLineDrafts[row.id] || {};
+      const defaultPriceRaw = gasoilPricePerL;
+      const rowPriceRaw = draft.prixPerL ?? row.prixPerL;
+      const effectivePriceRaw =
+        rowPriceRaw === "" || rowPriceRaw == null
+          ? defaultPriceRaw === "" || defaultPriceRaw == null
+            ? null
+            : Number(defaultPriceRaw)
+          : Number(rowPriceRaw);
+      return cloneGasoilRowSnapshot({
+        ...row,
+        heuresMarche: draft.heuresMarche ?? row.heuresMarche,
+        consommationLH: draft.consommationLH ?? row.consommationLH,
+        prixPerL: effectivePriceRaw,
+      });
+    });
 
     if (!rowsToPersist.length) {
       return;
@@ -1201,6 +1374,11 @@ export default function BudgetEditor() {
       : "Remplir les jours/mois";
 
   const onConfirmMonthlyModal = async () => {
+    const totalDaysInDraft = sumYearState(monthlyQtyDraftByYear);
+    if (modalMode !== "view" && totalDaysInDraft <= 0) {
+      alert("Veuillez remplir au moins une case dans les jours/mois.");
+      return;
+    }
     if (modalMode === "edit" && editingLineId) {
       await addLine(monthlyQtyDraftByYear);
       return;
@@ -1368,14 +1546,7 @@ export default function BudgetEditor() {
                     step="0.01"
                     value={gasoilPricePerL}
                     onChange={(e) => {
-                      const nextValue = e.target.value;
-                      setGasoilPricePerL(nextValue);
-                      if (activeScope?.id) {
-                        setGasoilPriceByScopeId((prev) => ({
-                          ...prev,
-                          [activeScope.id]: nextValue,
-                        }));
-                      }
+                      setGasoilPricePerL(e.target.value);
                     }}
                   />
                 </div>
@@ -1402,6 +1573,7 @@ export default function BudgetEditor() {
                     <th>Heures marche</th>
                     <th>Consommation L/H</th>
                     <th>Consommation journalière en L</th>
+                    <th>Prix de L en DH</th>
                     <th>Montant total</th>
                     <th>Détail des montants</th>
                   </tr>
@@ -1421,11 +1593,84 @@ export default function BudgetEditor() {
                         <td>{row.article}</td>
                         <td className="table-num-cell">{formatAmount(row.nombreMateriels)}</td>
                         <td className="table-num-cell">{formatAmount(row.nombreJours)}</td>
-                        <td className="table-num-cell">{formatAmount(row.heuresMarche)}</td>
-                        <td className="table-num-cell">{formatAmount(row.consommationLH)}</td>
-                        <td className="table-num-cell">{formatAmount(row.consommationJournaliereL)}</td>
+                        <td className="table-num-cell">
+                          {activeSection === "GASOIL" ? (
+                            <input
+                              className="table-inline-input"
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={String(getInlineLineValue(row.id, "heuresMarche", row.heuresMarche ?? 0))}
+                              onChange={(e) => setInlineLineField(row.id, "heuresMarche", e.target.value)}
+                              onBlur={() => saveInlineLineEdit("GASOIL", row)}
+                            />
+                          ) : (
+                            formatAmount(row.heuresMarche)
+                          )}
+                        </td>
+                        <td className="table-num-cell">
+                          {activeSection === "GASOIL" ? (
+                            <input
+                              className="table-inline-input"
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={String(getInlineLineValue(row.id, "consommationLH", row.consommationLH ?? 0))}
+                              onChange={(e) => setInlineLineField(row.id, "consommationLH", e.target.value)}
+                              onBlur={() => saveInlineLineEdit("GASOIL", row)}
+                            />
+                          ) : (
+                            formatAmount(row.consommationLH)
+                          )}
+                        </td>
+                        <td className="table-num-cell">
+                          {formatAmount(
+                            Number(getInlineLineValue(row.id, "heuresMarche", row.heuresMarche ?? 0) || 0) *
+                              Number(getInlineLineValue(row.id, "consommationLH", row.consommationLH ?? 0) || 0)
+                          )}
+                        </td>
                         <td>
-                          <b>{formatAmount(row.montantTotal)} DH</b>
+                          {activeSection === "GASOIL" ? (
+                            <input
+                              className="table-inline-input"
+                              type="number"
+                              min={0}
+                              step="0.01"
+                              value={String(
+                                getInlineLineValue(
+                                  row.id,
+                                  "prixPerL",
+                                  row.isPersisted ? row.prixPerL ?? "" : row.prixPerL ?? gasoilPricePerL ?? ""
+                                )
+                              )}
+                              onChange={(e) => setInlineLineField(row.id, "prixPerL", e.target.value)}
+                              onBlur={() => saveInlineLineEdit("GASOIL", row)}
+                            />
+                          ) : (
+                            formatOptionalAmount(row.prixPerL)
+                          )}
+                        </td>
+                        <td>
+                          <b>
+                            {formatAmount(
+                              Number(row.nombreJours || 0) *
+                                Number(row.nombreMateriels || 0) *
+                              Number(getInlineLineValue(row.id, "heuresMarche", row.heuresMarche ?? 0) || 0) *
+                              Number(getInlineLineValue(row.id, "consommationLH", row.consommationLH ?? 0) || 0) *
+                                Number(
+                                  getInlineLineValue(
+                                    row.id,
+                                    "prixPerL",
+                                    row.isPersisted
+                                      ? row.prixPerL ?? ""
+                                      : gasoilPricePerL !== ""
+                                      ? gasoilPricePerL
+                                      : row.prixPerL ?? ""
+                                  ) || 0
+                                )
+                            )}{" "}
+                            DH
+                          </b>
                         </td>
                         <td>
                           <div className="line-action-group">
@@ -1443,7 +1688,7 @@ export default function BudgetEditor() {
                     ))}
                     {filteredGasoilRows.length === 0 && (
                       <tr>
-                        <td colSpan={9}>Aucune ligne Gasoil pour ce scope.</td>
+                        <td colSpan={10}>Aucune ligne Gasoil pour ce scope.</td>
                       </tr>
                     )}
                   </tbody>
@@ -1527,7 +1772,7 @@ export default function BudgetEditor() {
                   </div>
                   <div className="gasoil-modal-kv">
                     <span>Prix de L en DH</span>
-                    <b>{formatAmount(gasoilPricePerL || gasoilDetailLine.prixPerL)}</b>
+                    <b>{formatAmount(gasoilDetailLine.prixPerL ?? gasoilPricePerL ?? 0)}</b>
                   </div>
                   <div className="gasoil-modal-total">
                     <span>Détail des montants</span>
@@ -1596,15 +1841,15 @@ export default function BudgetEditor() {
                           </React.Fragment>
                         );
                       })}
-                    </tbody>
+                  </tbody>
                   </table>
                   <div className="gasoil-modal-total" style={{ marginTop: 10 }}>
-                    <span>Total des jours</span>
-                    <b>{formatAmount(sumMonthlyQty(gasoilDetailModalQty))}</b>
+                    <span className="gasoil-modal-emphasis-label">Total des jours</span>
+                    <b className="gasoil-modal-emphasis-value">{formatAmount(sumMonthlyQty(gasoilDetailModalQty))}</b>
                   </div>
                 </div>
                 <div className="gasoil-modal-card gasoil-modal-card-detailed">
-                  <h5>Montant total</h5>
+                  <h5 className="gasoil-modal-emphasis-title">Montant total</h5>
                   <table className="gasoil-modal-table">
                     <tbody>
                       {[0, 1, 2].map((rowIdx) => {
@@ -1647,12 +1892,12 @@ export default function BudgetEditor() {
                     </div>
                     <div>
                       <span>Prix de L en DH</span>
-                      <b>{formatAmount(gasoilPricePerL || gasoilDetailLine.prixPerL)}</b>
+                      <b>{formatAmount(gasoilDetailLine.prixPerL ?? gasoilPricePerL ?? 0)}</b>
                     </div>
                   </div>
-                  <div className="gasoil-modal-total">
-                    <span>Montant total</span>
-                    <b>{formatAmount(gasoilDetailTotalAmount)} DH</b>
+                  <div className="gasoil-modal-total gasoil-modal-total-emphasis">
+                    <span className="gasoil-modal-emphasis-label">Montant total</span>
+                    <b className="gasoil-modal-emphasis-value">{formatAmount(gasoilDetailTotalAmount)} DH</b>
                   </div>
                 </div>
               </div>
@@ -2009,12 +2254,47 @@ export default function BudgetEditor() {
                     <tr key={l.id}>
                       <td>{l.subsection}</td>
                       <td>{l.article}</td>
-                  <td className="table-num-cell">{formatAmount(l.qty)}</td>
-                  <td className="table-num-cell">{formatAmount(l.pu)}</td>
-                  <td className="table-num-cell">{formatAmount(l.nombreJours ?? 0)}</td>
-                  <td>
-                    <b>{formatAmount(l.total)}</b>
-                  </td>
+                      <td className="table-num-cell">
+                        {activeSection === "MATERIEL" ? (
+                          <input
+                            className="table-inline-input"
+                            type="number"
+                            min={1}
+                            value={String(getInlineLineValue(l.id, "qty", l.qty ?? 1))}
+                            onChange={(e) => setInlineLineField(l.id, "qty", e.target.value)}
+                            onBlur={() => saveInlineLineEdit("MATERIEL", l)}
+                          />
+                        ) : (
+                          formatAmount(l.qty)
+                        )}
+                      </td>
+                      <td className="table-num-cell">
+                        {activeSection === "MATERIEL" ? (
+                          <input
+                            className="table-inline-input"
+                            type="number"
+                            min={0}
+                            step="0.01"
+                            value={String(getInlineLineValue(l.id, "pu", l.pu ?? 0))}
+                            onChange={(e) => setInlineLineField(l.id, "pu", e.target.value)}
+                            onBlur={() => saveInlineLineEdit("MATERIEL", l)}
+                          />
+                        ) : (
+                          formatAmount(l.pu)
+                        )}
+                      </td>
+                      <td className="table-num-cell">{formatAmount(l.nombreJours ?? 0)}</td>
+                      <td>
+                        <b>
+                          {formatAmount(
+                            activeSection === "MATERIEL"
+                              ? Number(l.nombreJours ?? 0) *
+                                  Number(getInlineLineValue(l.id, "qty", l.qty ?? 0) || 0) *
+                                  Number(getInlineLineValue(l.id, "pu", l.pu ?? 0) || 0)
+                              : l.total
+                          )}
+                        </b>
+                      </td>
                       <td>
                         <button
                           type="button"
@@ -2185,7 +2465,8 @@ export default function BudgetEditor() {
                                 ) : (
                                   <input
                                     type="number"
-                                    min={0}
+                                    min={1}
+                                    max={26}
                                     value={modalQty[m.key]}
                                     onChange={(e) =>
                                       setMonthlyQtyDraftByYear((prev) => {
@@ -2193,7 +2474,7 @@ export default function BudgetEditor() {
                                           ...prev,
                                           [Number(activeModalYear)]: {
                                             ...(prev[Number(activeModalYear)] || emptyMonthlyQty()),
-                                            [m.key]: e.target.value,
+                                            [m.key]: clampMonthlyQty(e.target.value),
                                           },
                                         };
                                         lineFormRef.current.monthlyQtyDraftByYear = next;
@@ -2212,7 +2493,8 @@ export default function BudgetEditor() {
                   </tbody>
                 </table>
                 <div style={{ textAlign: "center", marginTop: 8 }}>
-                  Total des jours: <b>{formatAmount(totalDaysInModal)}</b>
+                  <span className="gasoil-modal-emphasis-label">Total des jours:</span>{" "}
+                  <b className="gasoil-modal-emphasis-value">{formatAmount(totalDaysInModal)}</b>
                 </div>
               </div>
               <div

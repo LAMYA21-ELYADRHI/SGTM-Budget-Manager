@@ -16,6 +16,7 @@ class ProjectCreate(BaseModel):
     group_names: str = ""  # JSON string
     scope: str
     project_type: str
+    market_amount: int = 0
     scope_date: Optional[date] = None  # legacy
     scope_start_date: Optional[date] = None
     scope_end_date: Optional[date] = None

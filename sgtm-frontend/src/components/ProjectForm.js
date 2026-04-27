@@ -45,6 +45,7 @@ const buildProjectSignature = ({ formData, groupement, groupementNames, scopesLi
       start_date: String(formData.start_date || ""),
       end_date: String(formData.end_date || ""),
       project_type: String(formData.project_type || ""),
+      market_amount: String(formData.market_amount || ""),
       scope_start_date: String(formData.scope_start_date || ""),
       scope_end_date: String(formData.scope_end_date || ""),
       sections: Array.isArray(formData.sections) ? [...formData.sections].sort() : [],
@@ -101,6 +102,7 @@ const ProjectForm = () => {
     start_date: "",
     end_date: "",
     project_type: "",
+    market_amount: "",
     scope_start_date: "",
     scope_end_date: "",
     sections: [],
@@ -140,6 +142,7 @@ const ProjectForm = () => {
           start_date: p.start_date || "",
           end_date: p.end_date || "",
           project_type: p.project_type || "",
+          market_amount: String(p.market_amount ?? ""),
           scope_start_date: p.scope_start_date || "",
           scope_end_date: p.scope_end_date || "",
           sections:
@@ -178,6 +181,7 @@ const ProjectForm = () => {
                     start_date: p.start_date || "",
                     end_date: p.end_date || "",
                     project_type: p.project_type || "",
+                    market_amount: String(p.market_amount ?? ""),
                     scope_start_date: p.scope_start_date || "",
                     scope_end_date: p.scope_end_date || "",
                     sections:
@@ -207,6 +211,7 @@ const ProjectForm = () => {
                     start_date: p.start_date || "",
                     end_date: p.end_date || "",
                     project_type: p.project_type || "",
+                    market_amount: String(p.market_amount ?? ""),
                     scope_start_date: p.scope_start_date || "",
                     scope_end_date: p.scope_end_date || "",
                     sections:
@@ -237,6 +242,7 @@ const ProjectForm = () => {
                   start_date: p.start_date || "",
                   end_date: p.end_date || "",
                   project_type: p.project_type || "",
+                  market_amount: String(p.market_amount ?? ""),
                   scope_start_date: p.scope_start_date || "",
                   scope_end_date: p.scope_end_date || "",
                   sections:
@@ -268,6 +274,7 @@ const ProjectForm = () => {
                 start_date: p.start_date || "",
                 end_date: p.end_date || "",
                 project_type: p.project_type || "",
+                market_amount: String(p.market_amount ?? ""),
                 scope_start_date: p.scope_start_date || "",
                 scope_end_date: p.scope_end_date || "",
                 sections:
@@ -351,6 +358,11 @@ const ProjectForm = () => {
     // Validation obligatoire
     if (!formData.code || !formData.name || !formData.client) {
       alert("Veuillez remplir tous les champs obligatoires !");
+      return;
+    }
+
+    if (formData.market_amount === "" || Number.isNaN(Number(formData.market_amount))) {
+      alert("Veuillez saisir un montant de marché valide !");
       return;
     }
 
@@ -635,6 +647,23 @@ const ProjectForm = () => {
                         </label>
                       ))}
                     </div>
+                    <div style={{ marginTop: 10 }}>
+                      <div style={{ fontWeight: 700, marginBottom: 6, fontSize: 12 }}>Dates du scope</div>
+                      <div className="inline-row">
+                        <input
+                          type="date"
+                          value={scope.date_debut}
+                          onChange={(e) => updateScope(idx, { date_debut: e.target.value })}
+                          style={{ width: 150, padding: "7px 9px", fontSize: 13 }}
+                        />
+                        <input
+                          type="date"
+                          value={scope.date_fin}
+                          onChange={(e) => updateScope(idx, { date_fin: e.target.value })}
+                          style={{ width: 150, padding: "7px 9px", fontSize: 13 }}
+                        />
+                      </div>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -689,39 +718,21 @@ const ProjectForm = () => {
             </div>
 
             <div className="form-group">
-              <label>Dates des scopes *</label>
-              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-                {scopesList.map((scope, idx) => (
-                  <div
-                    key={`scope-right-${idx}`}
-                    style={{
-                      border: "1px solid #c8d2e6",
-                      borderRadius: 10,
-                      padding: 10,
-                      background: "#f6f8fc",
-                      maxWidth: 340,
-                    }}
-                  >
-                    <div style={{ fontWeight: 700, marginBottom: 6 }}>
-                      {scope.nom?.trim() || `Scope ${idx + 1}`}
-                    </div>
-                    <div className="inline-row">
-                      <input
-                        type="date"
-                        value={scope.date_debut}
-                        onChange={(e) => updateScope(idx, { date_debut: e.target.value })}
-                        style={{ width: 150, padding: "7px 9px", fontSize: 13 }}
-                      />
-                      <input
-                        type="date"
-                        value={scope.date_fin}
-                        onChange={(e) => updateScope(idx, { date_fin: e.target.value })}
-                        style={{ width: 150, padding: "7px 9px", fontSize: 13 }}
-                      />
-                    </div>
-                  </div>
-                ))}
-              </div>
+              <label>Montant de marché *</label>
+              <input
+                type="number"
+                name="market_amount"
+                min={0}
+                step={1}
+                value={formData.market_amount}
+                onChange={(e) => {
+                  const nextValue = e.target.value;
+                  setFormData((prev) => ({
+                    ...prev,
+                    market_amount: nextValue === "" ? "" : String(Math.max(0, Math.floor(Number(nextValue) || 0))),
+                  }));
+                }}
+              />
             </div>
 
           </div>

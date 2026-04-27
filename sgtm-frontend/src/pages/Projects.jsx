@@ -190,7 +190,7 @@ export default function Projects() {
   return (
     <div className="container budgets-dashboard">
       <div className="budgets-header">
-        <h1 className="title">Vos budgets</h1>
+        <h1 className="title">Mes budgets</h1>
       </div>
 
       <div className="budgets-toolbar">

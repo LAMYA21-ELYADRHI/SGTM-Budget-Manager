@@ -446,6 +446,9 @@ button:hover {
   overflow-x: auto;
   justify-content: center;
   box-shadow: inset 0 -1px 0 rgba(255, 255, 255, 0.08);
+  position: sticky;
+  top: 50px;
+  z-index: 900;
 }
 
 .budget-tab {
@@ -759,6 +762,11 @@ button:hover {
 
 .budget-form-card .article-input-wrap input {
   min-width: 0;
+}
+
+.budget-form-card .article-input-wrap input[readonly] {
+  cursor: pointer;
+  background: #f7faff;
 }
 
 .article-picker {
@@ -1102,7 +1110,7 @@ button:hover {
 
 .gasoil-modal-card-detailed h5 {
   margin: 0;
-  font-size: 18px;
+  font-size: 20px;
   color: var(--primary-dark);
   text-align: center;
 }
@@ -1212,6 +1220,27 @@ button:hover {
   font-size: 18px;
 }
 
+.gasoil-modal-total-emphasis {
+  box-shadow: 0 10px 24px rgba(11, 47, 120, 0.22);
+}
+
+.gasoil-modal-emphasis-title {
+  text-decoration: underline;
+  text-underline-offset: 4px;
+}
+
+.gasoil-modal-emphasis-label {
+  font-size: 14px !important;
+  font-weight: 800 !important;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+}
+
+.gasoil-modal-emphasis-value {
+  font-size: 22px !important;
+  font-weight: 800;
+}
+
 .gasoil-modal-formula {
   margin-top: 14px;
   padding: 12px 14px;
@@ -1299,6 +1328,22 @@ button:hover {
 .table-num-cell {
   text-align: center;
   white-space: nowrap;
+}
+
+.table-inline-input {
+  width: 92px;
+  max-width: 100%;
+  text-align: center;
+  margin: 0 auto;
+  padding: 6px 8px;
+  border-radius: 10px;
+  border: 1px solid #bfd0ea;
+  background: #fff;
+}
+
+.table-inline-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(16, 42, 126, 0.12);
 }
 
 .budget-table-body tbody tr:last-child td {

@@ -22,6 +22,7 @@ const normalizeProjectPayload = (projectData) => ({
   group_names: projectData.group_names ?? "",
   scope: projectData.scope ?? projectData.scopes ?? "",
   project_type: projectData.project_type ?? projectData.typeProjet ?? "",
+  market_amount: Number(projectData.market_amount ?? projectData.montantMarche ?? 0) || 0,
   scope_date: emptyToNull(projectData.scope_date ?? projectData.dateScope ?? ""),
   scope_start_date: emptyToNull(projectData.scope_start_date ?? ""),
   scope_end_date: emptyToNull(projectData.scope_end_date ?? ""),
