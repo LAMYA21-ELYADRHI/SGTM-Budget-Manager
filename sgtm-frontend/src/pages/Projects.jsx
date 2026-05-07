@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { deleteProject, getProjects } from "../api/api";
+import { deleteProject, duplicateProject, getProjects } from "../api/api";
 import "../styles.css";
-import { FiImage } from "react-icons/fi";
+import { FiCopy, FiImage } from "react-icons/fi";
 
 const STATUS_META = {
   valide: { label: "Budget validé", className: "status-valid" },
@@ -106,6 +106,7 @@ export default function Projects() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [projectImages, setProjectImages] = useState({});
+  const [duplicatingProjectId, setDuplicatingProjectId] = useState(null);
 
   useEffect(() => {
     let mounted = true;
@@ -175,6 +176,19 @@ export default function Projects() {
       onRemoveImage(project.id);
     } catch (e) {
       alert(e?.message || "Erreur API ❌");
+    }
+  };
+
+  const onDuplicateProject = async (project) => {
+    if (!project?.id || duplicatingProjectId) return;
+    try {
+      setDuplicatingProjectId(project.id);
+      const duplicated = await duplicateProject(project.id);
+      setProjects((prev) => [duplicated, ...prev]);
+    } catch (e) {
+      alert(e?.message || "Erreur API âŒ");
+    } finally {
+      setDuplicatingProjectId(null);
     }
   };
 
@@ -292,6 +306,17 @@ export default function Projects() {
                   </button>
                   <button type="button" className="btn-sm btn-secondary">
                     Voir récap dashboard
+                  </button>
+                  <button
+                    type="button"
+                    className="project-duplicate-btn"
+                    onClick={() => onDuplicateProject(p)}
+                    disabled={duplicatingProjectId === p.id}
+                    aria-label={`Dupliquer le projet ${p.name || ""}`}
+                    title="Dupliquer le projet"
+                  >
+                    <FiCopy aria-hidden="true" />
+                    <span>{duplicatingProjectId === p.id ? "..." : "Dupliquer"}</span>
                   </button>
                   {status === "en_creation" && (
                     <button

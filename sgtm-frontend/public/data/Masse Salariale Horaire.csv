@@ -1,0 +1,110 @@
+﻿Sous section ;Fonction;Nombre h/j ;Prix horaire 
+Equipe administrative;Agent pointeur;8;27,00
+Equipe administrative;Chauffeur transport;8;26,25
+Équipe administrative;Agent administratif;8;27,75
+Équipe atelier mécanique;Aide mécanicien;8;26,25
+Équipe atelier mécanique;Chauffeur camion entretien;8;26,25
+Équipe atelier mécanique;Chef d'équipe mécanique;8;28,50
+Équipe atelier mécanique;Eléctricien auto;8;28,50
+Équipe atelier mécanique;Mécanicien;8;27,00
+Équipe atelier mécanique;Mécanicien d'entretien;8;27,00
+Équipe atelier mécanique;Soudeur;8;27,75
+Équipe atelier mécanique;Tolier;8;27,75
+Équipe atelier mécanique;Vulcanisateur;8;27,75
+Équipe béton;Boiseur;8;26,25
+Équipe béton;Caporal;8;27,75
+Équipe béton;Chef d'équipe béton;8;28,50
+Équipe béton;Maçon;8;26,25
+Équipe béton;Manœuvre béton;8;25,65
+Équipe béton;Menuisier béton;8;27,00
+Équipe béton;Soudeur béton;8;27,00
+Équipe cab;Chaffeur camion malaxeur;8;26,25
+Équipe cab;Téchnicien cab;8;27,00
+Équipe carburant;Chauffeur camion gazoil;8;26,25
+Équipe carburant;Pompiste carburant;8;27,00
+Équipe échafaudage;Chef d'équipe montage;8;36,06
+Équipe échafaudage;Manœuvres;8;25,65
+Équipe échafaudage;Monteur;8;26,25
+Équipe éléctricité;Aide éléctricien ;8;26,25
+Équipe éléctricité;Electricien industriel;8;27,75
+Équipe ferraillage ;Caporal;8;27,00
+Équipe ferraillage ;Caporal;8;27,75
+Équipe ferraillage ;Chef d'équipe ferraillage;8;28,50
+Équipe ferraillage ;ferrailleur;8;26,25
+Équipe ferraillage ;Manœuvre ferraillage;8;25,65
+Équipe gardiennage;Agent de surveillance;8;25,65
+Équipe gardiennage;Chef d'équipe gardiennage;8;33,65
+Équipe h.S.E;Animateur hse;8;27,75
+Équipe h.S.E;Chauffeur ambulance;8;8,41
+Équipe h.S.E;Coordinatrice hse;8;24,04
+Équipe h.S.E;Employé;8;24,04
+Équipe h.S.E;Inférmier;8;28,85
+Équipe h.S.E;Superviseur hse;8;28,50
+Équipe h.S.E;Superviseur levage;8;28,50
+Équipe logistique;Agent suivi matériel;8;27,00
+Équipe logistique;Chaffeur camion plateaux;8;27,00
+Équipe logistique;Manœuvre;8;25,65
+Équipe magasin;Magasinier;8;28,85
+Équipe magasin;Manœuvre park magasin;8;25,65
+Équipe magasin;Responsable park magasin;8;38,46
+Équipe manutention logistique;Chauffeur camion 8*4;8;26,25
+Équipe manutention logistique;Chef d'équipe manutention logistique;8;28,50
+Équipe manutention logistique;Conducteur élevateur;8;27,75
+Équipe manutention logistique;Grutier grue à tour;8;30,00
+Équipe manutention logistique;Grutier grue mobile;8;30,00
+Équipe manutention logistique;Guideur grue mobile;8;25,65
+Équipe manutention logistique;Manœuvre;8;25,65
+Équipe manutention logistique;Monteur grue ;8;26,25
+Équipe manutention logistique;Pointeur grue mobile et a tour;8;26,25
+Équipe nettoyage;Caporal nettoyage;8;26,25
+Équipe nettoyage;Manœuvre nettoyage;8;25,65
+Équipe peinture;Peintre ;8;27,00
+Équipe qualité;Aide laborantin;8;26,25
+Équipe qualité;Technicien laboratoire;8;27,00
+Équipe qualité;Technicien qualité;8;28,50
+Équipe second œuvre;chefs d'équipe;8;27,00
+Équipe second œuvre;chefs d'équipe;8;28,50
+Équipe second œuvre;Maçons;8;26,25
+Équipe second œuvre;Manœuvres;8;25,65
+Équipe second œuvre;Menuisiers;8;27,00
+Équipe second œuvre;Peintres;8;27,00
+Équipe second œuvre;Plâtriers;8;27,00
+Équipe second œuvre;Plombiers;8;27,00
+Équipe terrassement;Caporal terrassement ;8;27,00
+Équipe terrassement;Chef d'équipe terrassement;8;28,50
+Équipe terrassement;Conducteur bobcat;8;27,75
+Équipe terrassement;Conducteur bulldozer;8;30,00
+Équipe terrassement;Conducteur chargeuse;8;28,50
+Équipe terrassement;Conducteur compacteur;8;27,75
+Équipe terrassement;Conducteur niveleus;8;28,50
+Équipe terrassement;Conducteur niveleuse;8;30,00
+Équipe terrassement;Conducteur pelle;8;29,25
+Équipe terrassement;Guideur;8;25,65
+Équipe terrassement;Manœuvre terrassement;8;25,65
+Équipe topographique;Niveleur;8;27,75
+Équipe topographique;Operateur topo;8;33,65
+Équipe topographique;Porte mire;8;25,65
+Équipe topographique;Technicien topographe;8;28,50
+Équipe travaux éléctrique;chefs d'équipe;8;28,50
+Équipe travaux éléctrique;Manœuvres;8;25,65
+Équipe travaux éléctrique;monteurs;8;39,00
+Équipe travaux éléctrique;superviseur travaux ;8;28,50
+Équipe travaux éléctrique;superviseur travaux ;8;39,00
+Équipe travaux FF;chefs d'équipe;8;28,50
+Équipe travaux FF;Manœuvres;8;25,65
+Équipe travaux FF;monteurs;8;39,00
+Équipe travaux HVAC;chefs d'équipe;8;28,50
+Équipe travaux HVAC;Manœuvres;8;25,65
+Équipe travaux HVAC;monteurs;8;39,00
+Équipe travaux mécanique ;chaudronnier;8;39,00
+Équipe travaux mécanique ;chefs d'équipe;8;28,50
+Équipe travaux mécanique ;fitters;8;39,00
+Équipe travaux mécanique ;foreman;8;39,00
+Équipe travaux mécanique ;Manœuvres;8;25,65
+Équipe travaux mécanique ;Mécanicien;8;27,00
+Équipe travaux mécanique ;monteurs;8;39,00
+Équipe travaux mécanique ;Profileurs;8;39,00
+Équipe travaux mécanique ;Riggers;8;39,00
+Équipe travaux mécanique ;Soudeurs;8;39,00
+Équipe travaux mécanique ;superviseur travaux ;8;28,50
+Équipe travaux mécanique ;tuyauteur;8;39,00

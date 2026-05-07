@@ -10,6 +10,8 @@ class DetailMensuelBase(BaseModel):
     mois: int
     annee: int
     quantite: float
+    montant_brut: float = 0.0
+    montant_net: float = 0.0
 
 
 class DetailMensuelCreate(DetailMensuelBase):
@@ -28,6 +30,7 @@ class DetailMensuelResponse(DetailMensuelBase):
 # ==========================================
 class LigneOTPBase(BaseModel):
     code_otp: str
+    section: str = ""
     designation: str
     unite: str
     nombre_jours: int = 1
@@ -96,6 +99,8 @@ class SectionBudgetaireResponse(SectionBudgetaireBase):
 class ScopeBase(BaseModel):
     nom: str
     total_scope: float = 0.0
+    total_masse_salariale_mensuel: float = 0.0
+    total_masse_salariale_horaire: float = 0.0
     section_id: Optional[int] = None
 
 

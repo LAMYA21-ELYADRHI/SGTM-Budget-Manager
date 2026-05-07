@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException
+﻿from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from typing import List
 import json
+import unicodedata
 
 from app.database import SessionLocal
 from app.models import budget as budget_models
@@ -14,7 +15,7 @@ SECTION_ALIASES = {
     "INSTALLATION": {"S1", "INSTALLATION"},
     "HSE": {"S2", "HSE"},
     "MASSE_SALARIALE": {"S3", "MASSE SALARIALE", "MASSE_SALARIALE"},
-    "MATERIEL": {"S4", "MATERIEL", "MATÉRIEL"},
+    "MATERIEL": {"S4", "MATERIEL", "MATÃ‰RIEL"},
     "GASOIL": {"S5", "GASOIL"},
     "SOUSTRAITANCE": {"S6", "SOUSTRAITANCE", "SOUS TRAITANCE"},
     "FOURNITURES": {"FOURNITURES"},
@@ -23,24 +24,14 @@ SECTION_ALIASES = {
 
 
 def normalize_text(value):
-    return (
-        str(value or "")
-        .strip()
-        .upper()
-        .replace("É", "E")
-        .replace("È", "E")
-        .replace("Ê", "E")
-        .replace("À", "A")
-        .replace("Â", "A")
-        .replace("Î", "I")
-        .replace("Ô", "O")
-        .replace("Ù", "U")
-        .replace("Û", "U")
-        .replace("Ç", "C")
-        .replace("_", "")
-        .replace("-", "")
-        .replace(" ", "")
-    )
+    text = str(value or "").strip()
+    if not text:
+        return ""
+
+    text = text.replace("¹", "1").replace("²", "2").replace("³", "3")
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return text.upper().replace("_", "").replace("-", "").replace(" ", "")
 
 
 def canonical_section_code(value):
@@ -54,6 +45,74 @@ def canonical_section_code(value):
         if any(normalized == normalize_text(alias) for alias in aliases):
             return code
     return normalized
+
+
+def calculate_salary_totals_for_scope(scope):
+    monthly_total = 0.0
+    hourly_total = 0.0
+
+    for section in scope.sections or []:
+        if canonical_section_code(section.nom) != "MASSE_SALARIALE":
+            continue
+        for ss in section.sous_sections or []:
+            for line in ss.lignes_otp or []:
+                amount = float(line.montant_total or 0.0)
+                unit = normalize_text(line.unite)
+                if unit == "MOIS":
+                    monthly_total += amount
+                elif unit == "JOUR":
+                    hourly_total += amount
+
+    scope.total_masse_salariale_mensuel = monthly_total
+    scope.total_masse_salariale_horaire = hourly_total
+
+
+def recalculate_budget_totals(budget):
+    total_global = 0.0
+    for scope in budget.scopes or []:
+        calculate_salary_totals_for_scope(scope)
+        total_scope = 0.0
+        for section in scope.sections or []:
+            total_section = 0.0
+            for ss in section.sous_sections or []:
+                total_ss = 0.0
+                for line in ss.lignes_otp or []:
+                    total_ss += float(line.montant_total or 0.0)
+                ss.total_sous_section = total_ss
+                total_section += total_ss
+            section.total_section = total_section
+            if canonical_section_code(section.nom) != "GASOIL":
+                total_scope += total_section
+        scope.total_scope = total_scope
+        total_global += total_scope
+    budget.total_global = total_global
+
+
+def resolve_material_catalogue_otp(db: Session, designation: str):
+    target = normalize_text(designation)
+    if not target:
+        return None
+
+    all_otps = db.query(budget_models.CatalogueOTP).all()
+    matches = [
+        otp
+        for otp in all_otps
+        if normalize_text(otp.designation) == target
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    return None
+
+
+def resolve_material_catalogue_otp_by_code(db: Session, code_otp: str):
+    target = normalize_text(code_otp)
+    if not target:
+        return None
+    all_otps = db.query(budget_models.CatalogueOTP).all()
+    matches = [otp for otp in all_otps if normalize_text(otp.code_otp) == target]
+    if len(matches) == 1:
+        return matches[0]
+    return None
 
 
 def resolve_scope_section_id(db: Session, selected_section_codes):
@@ -105,7 +164,7 @@ def parse_project_scopes(raw):
     except Exception:
         pass
 
-    # fallback legacy: simple string séparée par virgule / saut de ligne / point-virgule
+    # fallback legacy: simple string sÃ©parÃ©e par virgule / saut de ligne / point-virgule
     s = str(raw)
     for sep in ["\n", ";"]:
         s = s.replace(sep, ",")
@@ -195,12 +254,12 @@ def get_or_create_budget(project_id: int, db: Session = Depends(get_db)):
     wanted_scopes = parse_project_scopes(project.scope)
 
     if budget:
-        # Sync robuste sans recréer un nouveau budget si celui-ci a déjà été validé.
+        # Sync robuste sans recrÃ©er un nouveau budget si celui-ci a dÃ©jÃ  Ã©tÃ© validÃ©.
         # On conserve le budget existant et on aligne seulement sa structure de scopes/sections.
         existing_scopes = sorted((budget.scopes or []), key=lambda s: s.id)
         changed = False
 
-        # 1) renommer les scopes déjà existants par index
+        # 1) renommer les scopes dÃ©jÃ  existants par index
         common_len = min(len(existing_scopes), len(wanted_scopes))
         for i in range(common_len):
             wanted_scope = wanted_scopes[i]
@@ -220,7 +279,7 @@ def get_or_create_budget(project_id: int, db: Session = Depends(get_db)):
             db.add(new_scope)
             changed = True
 
-        # 3) supprimer les scopes excédentaires seulement s'ils n'ont pas de données
+        # 3) supprimer les scopes excÃ©dentaires seulement s'ils n'ont pas de donnÃ©es
         for extra in existing_scopes[len(wanted_scopes):]:
             has_data = any((sec.sous_sections or []) for sec in (extra.sections or []))
             if not has_data:
@@ -230,7 +289,7 @@ def get_or_create_budget(project_id: int, db: Session = Depends(get_db)):
         if changed:
             db.commit()
 
-        # Resynchronisation des sections après commit pour les scopes nouvellement ajoutés
+        # Resynchronisation des sections aprÃ¨s commit pour les scopes nouvellement ajoutÃ©s
         refreshed_budget = (
             db.query(budget_models.Budget)
             .options(
@@ -249,7 +308,7 @@ def get_or_create_budget(project_id: int, db: Session = Depends(get_db)):
             sync_scope_sections(db, scope, wanted_scope.get("sections", []))
         db.commit()
 
-        return (
+        budget_to_return = (
             db.query(budget_models.Budget)
             .options(
                 joinedload(budget_models.Budget.scopes)
@@ -261,13 +320,18 @@ def get_or_create_budget(project_id: int, db: Session = Depends(get_db)):
             .filter(budget_models.Budget.id == budget.id)
             .first()
         )
+        if budget_to_return:
+            recalculate_budget_totals(budget_to_return)
+            db.commit()
+            db.refresh(budget_to_return)
+        return budget_to_return
 
     budget = budget_models.Budget(projet_id=project_id, statut="BROUILLON")
     db.add(budget)
     db.commit()
     db.refresh(budget)
 
-    # créer automatiquement les scopes du budget à partir du projet
+    # crÃ©er automatiquement les scopes du budget Ã  partir du projet
     for scope_data in wanted_scopes:
         db.add(
             budget_models.Scope(
@@ -293,6 +357,22 @@ def get_or_create_budget(project_id: int, db: Session = Depends(get_db)):
         for scope, wanted_scope in zip(budget.scopes or [], wanted_scopes):
             sync_scope_sections(db, scope, wanted_scope.get("sections", []))
         db.commit()
+    budget = (
+        db.query(budget_models.Budget)
+        .options(
+            joinedload(budget_models.Budget.scopes)
+            .joinedload(budget_models.Scope.sections)
+            .joinedload(budget_models.SectionBudgetaire.sous_sections)
+            .joinedload(budget_models.SousSection.lignes_otp)
+            .joinedload(budget_models.LigneOTP.details_mensuels)
+        )
+        .filter(budget_models.Budget.id == budget.id)
+        .first()
+    )
+    if budget:
+        recalculate_budget_totals(budget)
+        db.commit()
+        db.refresh(budget)
     return budget
 
 
@@ -397,7 +477,7 @@ def import_catalogue(payload: budget_schemas.CatalogueImportPayload, db: Session
                     )
                     inserted["otps"] += 1
                 else:
-                    # on met à jour si le code existe déjà (et on rattache à la sous-section)
+                    # on met Ã  jour si le code existe dÃ©jÃ  (et on rattache Ã  la sous-section)
                     existing_otp.designation = otp.designation
                     existing_otp.unite = otp.unite
                     existing_otp.prix_unitaire_reference = otp.prix_unitaire_reference or 0.0
@@ -532,8 +612,17 @@ def create_ligne_otp(
     if not ss:
         raise HTTPException(status_code=404, detail="Sous-section not found")
 
+    resolved_code_otp = payload.code_otp
+    if canonical_section_code(payload.section) == "MATERIEL":
+        resolved_otp = resolve_material_catalogue_otp_by_code(db, payload.code_otp)
+        if not resolved_otp:
+            resolved_otp = resolve_material_catalogue_otp(db, payload.designation)
+        if resolved_otp:
+            resolved_code_otp = resolved_otp.code_otp
+
     line = budget_models.LigneOTP(
-        code_otp=payload.code_otp,
+        code_otp=resolved_code_otp,
+        section=payload.section,
         designation=payload.designation,
         unite=payload.unite,
         nombre_jours=payload.nombre_jours,
@@ -545,7 +634,7 @@ def create_ligne_otp(
         sous_section_id=sous_section_id,
     )
     db.add(line)
-    db.flush()  # pour récupérer line.id avant les details
+    db.flush()  # pour rÃ©cupÃ©rer line.id avant les details
 
     for d in payload.details_mensuels or []:
         db.add(
@@ -553,6 +642,8 @@ def create_ligne_otp(
                 mois=d.mois,
                 annee=d.annee,
                 quantite=d.quantite,
+                montant_brut=d.montant_brut,
+                montant_net=d.montant_net,
                 ligne_otp_id=line.id,
             )
         )
@@ -578,7 +669,16 @@ def update_ligne_otp(ligne_id: int, payload: budget_schemas.LigneOTPCreate, db: 
     if not line:
         raise HTTPException(status_code=404, detail="Ligne OTP not found")
 
-    line.code_otp = payload.code_otp
+    resolved_code_otp = payload.code_otp
+    if canonical_section_code(payload.section) == "MATERIEL":
+        resolved_otp = resolve_material_catalogue_otp_by_code(db, payload.code_otp)
+        if not resolved_otp:
+            resolved_otp = resolve_material_catalogue_otp(db, payload.designation)
+        if resolved_otp:
+            resolved_code_otp = resolved_otp.code_otp
+
+    line.code_otp = resolved_code_otp
+    line.section = payload.section
     line.designation = payload.designation
     line.unite = payload.unite
     line.nombre_jours = payload.nombre_jours
@@ -588,7 +688,7 @@ def update_ligne_otp(ligne_id: int, payload: budget_schemas.LigneOTPCreate, db: 
     line.heures_marche = payload.heures_marche
     line.consommation_l_h = payload.consommation_l_h
 
-    # stratégie simple: remplacer complètement les détails mensuels
+    # stratÃ©gie simple: remplacer complÃ¨tement les dÃ©tails mensuels
     for existing in list(line.details_mensuels or []):
         db.delete(existing)
 
@@ -600,6 +700,8 @@ def update_ligne_otp(ligne_id: int, payload: budget_schemas.LigneOTPCreate, db: 
                 mois=d.mois,
                 annee=d.annee,
                 quantite=d.quantite,
+                montant_brut=d.montant_brut,
+                montant_net=d.montant_net,
                 ligne_otp_id=line.id,
             )
         )
@@ -622,6 +724,7 @@ def duplicate_ligne_otp(ligne_id: int, db: Session = Depends(get_db)):
 
     new_line = budget_models.LigneOTP(
         code_otp=source.code_otp,
+        section=source.section,
         designation=source.designation,
         unite=source.unite,
         nombre_jours=source.nombre_jours,
@@ -641,6 +744,8 @@ def duplicate_ligne_otp(ligne_id: int, db: Session = Depends(get_db)):
                 mois=detail.mois,
                 annee=detail.annee,
                 quantite=detail.quantite,
+                montant_brut=detail.montant_brut,
+                montant_net=detail.montant_net,
                 ligne_otp_id=new_line.id,
             )
         )
@@ -701,24 +806,7 @@ def recalculate_budget(budget_id: int, db: Session = Depends(get_db)):
     if not budget:
         raise HTTPException(status_code=404, detail="Budget not found")
 
-    total_global = 0.0
-    for scope in budget.scopes or []:
-        total_scope = 0.0
-        for section in scope.sections or []:
-            total_section = 0.0
-            for ss in section.sous_sections or []:
-                total_ss = 0.0
-                for line in ss.lignes_otp or []:
-                    total_ss += float(line.montant_total or 0.0)
-                ss.total_sous_section = total_ss
-                total_section += total_ss
-            section.total_section = total_section
-            if canonical_section_code(section.nom) != "GASOIL":
-                total_scope += total_section
-        scope.total_scope = total_scope
-        total_global += total_scope
-
-    budget.total_global = total_global
+    recalculate_budget_totals(budget)
     db.commit()
     db.refresh(budget)
 
@@ -746,3 +834,4 @@ def validate_budget(budget_id: int, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(budget)
     return budget
+

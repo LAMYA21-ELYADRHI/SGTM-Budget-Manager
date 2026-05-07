@@ -31,6 +31,8 @@ class Scope(Base):
     id = Column(Integer, primary_key=True, index=True)
     nom = Column(String)
     total_scope = Column(Float, default=0.0)
+    total_masse_salariale_mensuel = Column(Float, default=0.0)
+    total_masse_salariale_horaire = Column(Float, default=0.0)
 
     budget_id = Column(Integer, ForeignKey("budgets.id"))
     budget = relationship("Budget", back_populates="scopes")
@@ -81,6 +83,7 @@ class LigneOTP(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     code_otp = Column(String, index=True)
+    section = Column(String, default="")
     designation = Column(String)
     unite = Column(String)
     nombre_jours = Column(Integer, default=1)
@@ -103,6 +106,8 @@ class DetailMensuel(Base):
     mois = Column(Integer)
     annee = Column(Integer)
     quantite = Column(Float, default=0.0)
+    montant_brut = Column(Float, default=0.0)
+    montant_net = Column(Float, default=0.0)
     
     ligne_otp_id = Column(Integer, ForeignKey("lignes_otp.id"))
     ligne_otp = relationship("LigneOTP", back_populates="details_mensuels")
@@ -144,3 +149,30 @@ class CatalogueOTP(Base):
     
     sous_section_id = Column(Integer, ForeignKey("catalogue_sous_sections.id"))
     sous_section = relationship("CatalogueSousSection", back_populates="otps")
+
+
+# ==========================================
+# 5. CATALOGUES CSV (fichiers bruts importes)
+# ==========================================
+class CsvCatalogue(Base):
+    __tablename__ = "csv_catalogues"
+
+    id = Column(Integer, primary_key=True, index=True)
+    file_name = Column(String, unique=True, index=True)
+    display_name = Column(String)
+    delimiter = Column(String, default=";")
+    columns_json = Column(String, default="[]")
+    updated_at = Column(DateTime, default=datetime.utcnow)
+
+    rows = relationship("CsvCatalogueRow", back_populates="catalogue", cascade="all, delete-orphan")
+
+
+class CsvCatalogueRow(Base):
+    __tablename__ = "csv_catalogue_rows"
+
+    id = Column(Integer, primary_key=True, index=True)
+    catalogue_id = Column(Integer, ForeignKey("csv_catalogues.id"), index=True)
+    row_index = Column(Integer, default=0)
+    row_json = Column(String, default="{}")
+
+    catalogue = relationship("CsvCatalogue", back_populates="rows")

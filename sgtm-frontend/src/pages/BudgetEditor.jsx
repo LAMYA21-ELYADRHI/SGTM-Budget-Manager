@@ -15,6 +15,7 @@ import {
   FiHash,
   FiHome,
   FiLayers,
+  FiList,
   FiPercent,
   FiShield,
   FiTable,
@@ -53,6 +54,8 @@ import {
   serializeGasoilRowToPayload,
   sumGasoilRows,
 } from "../services/gasoil";
+import SalarySection from "./SalarySection";
+import SalarySectionHoraire from "./SalarySectionHoraire";
 
 const MONTHS = [
   { key: "janvier", month: 1, label: "Janvier" },
@@ -84,14 +87,59 @@ const detailsToYearState = (details = []) =>
     return acc;
   }, {});
 
-const yearStateToDetails = (yearState = {}) =>
-  Object.entries(yearState).flatMap(([year, months]) =>
-    MONTHS.filter((m) => Number(months?.[m.key] || 0) > 0).map((m) => ({
-      mois: m.month,
-      annee: Number(year),
-      quantite: Number(months[m.key] || 0),
-    }))
+const buildNetAmountsFromGross = (grossAmounts = [], remiseRate = 0) => {
+  const safeGross = grossAmounts.map((value) => roundAmount(Number(value || 0)));
+  const totalGross = roundAmount(safeGross.reduce((sum, value) => sum + value, 0));
+  const rate = normalizeDiscountRate(remiseRate);
+  const targetNetTotal = roundAmount(totalGross * (1 - rate / 100));
+
+  if (totalGross <= 0) {
+    return safeGross.map(() => 0);
+  }
+
+  const netAmounts = safeGross.map(() => 0);
+  let allocatedNet = 0;
+
+  safeGross.forEach((gross, index) => {
+    if (index === safeGross.length - 1) {
+      netAmounts[index] = roundAmount(targetNetTotal - allocatedNet);
+      return;
+    }
+    const proportionalNet = roundAmount((gross / totalGross) * targetNetTotal);
+    netAmounts[index] = proportionalNet;
+    allocatedNet = roundAmount(allocatedNet + proportionalNet);
+  });
+
+  return netAmounts;
+};
+
+const yearStateToDetails = (
+  yearState = {},
+  { unitPrice = 0, quantity = 0, remiseRate = 0 } = {}
+) => {
+  const rawDetails = Object.entries(yearState).flatMap(([year, months]) =>
+    MONTHS.filter((m) => Number(months?.[m.key] || 0) > 0).map((m) => {
+      const monthQty = Number(months[m.key] || 0);
+      const gross = roundAmount(monthQty * Number(unitPrice || 0) * Number(quantity || 0));
+      return {
+        mois: m.month,
+        annee: Number(year),
+        quantite: monthQty,
+        montant_brut: gross,
+      };
+    })
   );
+
+  const netAmounts = buildNetAmountsFromGross(
+    rawDetails.map((detail) => detail.montant_brut),
+    remiseRate
+  );
+
+  return rawDetails.map((detail, index) => ({
+    ...detail,
+    montant_net: netAmounts[index] ?? 0,
+  }));
+};
 
 const sumMonthlyQty = (monthlyQty = {}) =>
   MONTHS.reduce((sum, month) => sum + Number(monthlyQty?.[month.key] || 0), 0);
@@ -103,6 +151,48 @@ const cloneDetailsMensuels = (details) =>
   Array.isArray(details)
     ? details.map((detail) => ({ ...(detail || {}) }))
     : [];
+
+const detailAmount = (detail, field) => {
+  const parsed = Number(detail?.[field]);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const sumDetailAmounts = (details, field) =>
+  (Array.isArray(details) ? details : []).reduce(
+    (sum, detail) => sum + detailAmount(detail, field),
+    0
+  );
+
+const stripDetailAmounts = (details) =>
+  (Array.isArray(details) ? details : []).map((detail) => ({
+    mois: Number(detail?.mois || 0),
+    annee: Number(detail?.annee || 0),
+    quantite: Number(detail?.quantite || 0),
+  }));
+
+const calculateLineGrossTotal = (line) => {
+  const detailsGross = sumDetailAmounts(line?.detailsMensuels, "montant_brut");
+  if (detailsGross > 0) return detailsGross;
+  return (
+    Number(line?.nombreJours ?? 0) *
+    Number(line?.qty ?? line?.quantite_globale ?? 0) *
+    Number(line?.pu ?? 0)
+  );
+};
+
+const calculateLineNetTotal = (line) => {
+  const detailsNet = sumDetailAmounts(line?.detailsMensuels, "montant_net");
+  if (detailsNet > 0) return detailsNet;
+  const total = Number(line?.total ?? line?.montant_total ?? 0);
+  return Number.isFinite(total) ? total : 0;
+};
+
+const calculateLineDiscountRate = (line) => {
+  const gross = calculateLineGrossTotal(line);
+  const net = calculateLineNetTotal(line);
+  if (gross <= 0 || net >= gross) return 0;
+  return normalizeDiscountRate(((gross - net) / gross) * 100);
+};
 
 const clampMonthlyQty = (value) => {
   if (value === "" || value == null) return "";
@@ -141,6 +231,9 @@ const getYearsBetweenDates = (startDate, endDate) => {
 const normalize = (s) =>
   String(s || "")
     .normalize("NFD")
+    .replace(/[¹]/g, "1")
+    .replace(/[²]/g, "2")
+    .replace(/[³]/g, "3")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[_\s]+/g, "")
     .toUpperCase();
@@ -212,6 +305,14 @@ const parseFlexibleNumber = (value) => {
   return Number.isFinite(parsed) ? parsed : NaN;
 };
 
+const roundAmount = (value) => Number(Number(value || 0).toFixed(2));
+
+const normalizeDiscountRate = (value) => {
+  const parsed = Number(value || 0);
+  if (!Number.isFinite(parsed)) return 0;
+  return Math.min(100, Math.max(0, parsed));
+};
+
 const formatAmount = (value) =>
   new Intl.NumberFormat("fr-FR", {
     minimumFractionDigits: 2,
@@ -252,6 +353,10 @@ export default function BudgetEditor() {
   const navigate = useNavigate();
   const { projectId } = useParams();
   const [activeSection, setActiveSection] = useState(SECTION_OPTIONS[3].code);
+  const [salaryInterface, setSalaryInterface] = useState("");
+  const [salaryDropdownOpen, setSalaryDropdownOpen] = useState(false);
+  const [salaryDropdownPosition, setSalaryDropdownPosition] = useState({ top: 0, left: 0 });
+  const salaryTabButtonRef = useRef(null);
   const [activeScopeId, setActiveScopeId] = useState(null);
 
   const [budget, setBudget] = useState(null);
@@ -270,10 +375,13 @@ export default function BudgetEditor() {
   const [inlineLineDrafts, setInlineLineDrafts] = useState({});
 
   const [subsection, setSubsection] = useState("");
+  const [subsectionQuery, setSubsectionQuery] = useState("");
+  const [subsectionPickerOpen, setSubsectionPickerOpen] = useState(false);
   const [otpId, setOtpId] = useState("");
   const [article, setArticle] = useState("");
   const [articleQuery, setArticleQuery] = useState("");
   const [articlePickerOpen, setArticlePickerOpen] = useState(false);
+  const subsectionWrapRef = useRef(null);
   const articleWrapRef = useRef(null);
   const [unit, setUnit] = useState("");
   const [quantite, setQuantite] = useState("1");
@@ -286,6 +394,7 @@ export default function BudgetEditor() {
   const [showMonthlyModal, setShowMonthlyModal] = useState(false);
   const [modalMode, setModalMode] = useState("create");
   const [editingLineId, setEditingLineId] = useState(null);
+  const [modalHasUserChanges, setModalHasUserChanges] = useState(false);
   const [lineSectionOverride, setLineSectionOverride] = useState("");
   const lineFormRef = useRef({
     subsection: "",
@@ -295,6 +404,7 @@ export default function BudgetEditor() {
     unit: "",
     quantite: "1",
     pu: "",
+    remise: "",
     monthlyQtyByYear: {},
     monthlyQtyDraftByYear: {},
   });
@@ -384,6 +494,7 @@ export default function BudgetEditor() {
       unit,
       quantite,
       pu,
+      remise,
       monthlyQtyByYear,
       monthlyQtyDraftByYear,
       sectionCode: lineSectionOverride,
@@ -396,6 +507,7 @@ export default function BudgetEditor() {
     unit,
     quantite,
     pu,
+    remise,
     monthlyQtyByYear,
     monthlyQtyDraftByYear,
     lineSectionOverride,
@@ -423,8 +535,10 @@ export default function BudgetEditor() {
 
   useEffect(() => {
     const handlePointerDown = (event) => {
-      if (!articleWrapRef.current) return;
-      if (!articleWrapRef.current.contains(event.target)) {
+      if (subsectionWrapRef.current && !subsectionWrapRef.current.contains(event.target)) {
+        setSubsectionPickerOpen(false);
+      }
+      if (articleWrapRef.current && !articleWrapRef.current.contains(event.target)) {
         setArticlePickerOpen(false);
       }
     };
@@ -450,6 +564,7 @@ export default function BudgetEditor() {
     // Ne réinitialiser que si aucun formulaire n'est en cours de saisie
     if (!articleQuery && !subsection && !pu) {
       setRemise("");
+      lineFormRef.current.remise = "";
       setShowMonthlyModal(false);
       setArticlePickerOpen(false);
     }
@@ -518,6 +633,56 @@ export default function BudgetEditor() {
 
   const isMaterialSection = activeSection === "MATERIEL";
   const isGasoilSection = activeSection === "GASOIL";
+  const isSalarySection = activeSection === "MASSE_SALARIALE";
+
+  const selectSalaryInterface = (nextInterface) => {
+    setSalaryInterface(nextInterface);
+    setActiveSection("MASSE_SALARIALE");
+    setSalaryDropdownOpen(false);
+  };
+
+  const updateSalaryDropdownPosition = useCallback(() => {
+    const button = salaryTabButtonRef.current;
+    if (!button) return;
+    const rect = button.getBoundingClientRect();
+    setSalaryDropdownPosition({
+      top: rect.bottom + 6,
+      left: rect.left,
+    });
+  }, []);
+
+  const toggleSalaryPanel = () => {
+    setSalaryDropdownOpen((prev) => {
+      const next = !prev;
+      if (next) updateSalaryDropdownPosition();
+      return next;
+    });
+  };
+
+  useEffect(() => {
+    if (!salaryDropdownOpen) return;
+    const handleViewportChange = () => updateSalaryDropdownPosition();
+    window.addEventListener("resize", handleViewportChange);
+    window.addEventListener("scroll", handleViewportChange, true);
+    return () => {
+      window.removeEventListener("resize", handleViewportChange);
+      window.removeEventListener("scroll", handleViewportChange, true);
+    };
+  }, [salaryDropdownOpen, updateSalaryDropdownPosition]);
+  const salaryDropdownButtonStyle = (isActive) => ({
+    width: "100%",
+    textAlign: "left",
+    borderRadius: 10,
+    padding: "10px 12px",
+    border: "1px solid transparent",
+    fontWeight: 600,
+    letterSpacing: "0.1px",
+    background: isActive ? "linear-gradient(135deg, #0f3f8a 0%, #1b5fc4 100%)" : "#f8fafc",
+    color: isActive ? "#ffffff" : "#0f172a",
+    boxShadow: isActive ? "0 10px 20px rgba(27, 95, 196, 0.28)" : "none",
+    transition: "all 0.2s ease",
+    cursor: "pointer",
+  });
 
   useEffect(() => {
     setGasoilArticleQuery("");
@@ -557,11 +722,19 @@ export default function BudgetEditor() {
 
   const availableCatalogueOtps = isMaterialSection ? materialOtps : catalogueOtps;
 
+  const filteredCatalogueSousSections = useMemo(() => {
+    const query = String(subsectionQuery || "").trim().toLowerCase();
+    if (!query) return availableCatalogueSousSections;
+    return availableCatalogueSousSections.filter((item) =>
+      String(item?.nom_sous_section || "").toLowerCase().includes(query)
+    );
+  }, [availableCatalogueSousSections, subsectionQuery]);
+
   const buildGasoilRowsForScope = useCallback(
-    (scope, fallbackPricePerL = "") => {
+    (scope) => {
       if (!scope) return [];
       const materialLines = collectSectionLines(scope, "MATERIEL");
-      const draftRows = deriveGasoilRows(materialLines, gasoilCatalogue, fallbackPricePerL);
+      const draftRows = deriveGasoilRows(materialLines, gasoilCatalogue, null);
       const savedRows = collectSectionLines(scope, "GASOIL");
       const savedRowsBySourceId = new Map();
       const legacySavedRows = [];
@@ -601,14 +774,12 @@ export default function BudgetEditor() {
           });
         }
 
-        const priceForNewRow =
-          fallbackPricePerL === "" || fallbackPricePerL == null ? null : Number(fallbackPricePerL);
-        const recalculated = calculateGasoilRow(draftRow.materialLine, gasoilCatalogue, priceForNewRow);
+        const recalculated = calculateGasoilRow(draftRow.materialLine, gasoilCatalogue, null);
         return cloneGasoilRowSnapshot({
           ...recalculated,
           id: draftRow.id,
           isPersisted: false,
-          prixPerL: priceForNewRow,
+          prixPerL: null,
           sourceMaterialLineId: sourceId,
         });
       });
@@ -618,22 +789,84 @@ export default function BudgetEditor() {
 
   const gasoilRows = useMemo(() => {
     if (!isGasoilSection) return [];
-    return buildGasoilRowsForScope(activeScope, gasoilPricePerL);
-  }, [activeScope, buildGasoilRowsForScope, gasoilPricePerL, isGasoilSection]);
+    return buildGasoilRowsForScope(activeScope);
+  }, [activeScope, buildGasoilRowsForScope, isGasoilSection]);
+
+  const handleGasoilPricePerLChange = useCallback(
+    (nextValue) => {
+      setGasoilPricePerL(nextValue);
+      if (!isGasoilSection) return;
+      if (nextValue === "" || nextValue == null) return;
+
+      setInlineLineDrafts((prev) => {
+        const next = { ...prev };
+        for (const row of gasoilRows) {
+          const draftPrice = next[row.id]?.prixPerL;
+          const hasRowPrice = row?.prixPerL !== null && row?.prixPerL !== undefined && row?.prixPerL !== "";
+          const isFollowingGlobalValue =
+            draftPrice !== undefined && String(draftPrice) === String(gasoilPricePerL ?? "");
+          if (!hasRowPrice && (draftPrice === undefined || isFollowingGlobalValue)) {
+            next[row.id] = {
+              ...(next[row.id] || {}),
+              prixPerL: nextValue,
+            };
+          }
+        }
+        return next;
+      });
+    },
+    [gasoilRows, isGasoilSection, gasoilPricePerL]
+  );
+
+  useEffect(() => {
+    if (!isGasoilSection) return;
+    if (gasoilPricePerL === "" || gasoilPricePerL == null) return;
+
+    setInlineLineDrafts((prev) => {
+      const next = { ...prev };
+      for (const row of gasoilRows) {
+        const hasDraftPrice = next[row.id]?.prixPerL !== undefined;
+        const hasRowPrice = row?.prixPerL !== null && row?.prixPerL !== undefined && row?.prixPerL !== "";
+        if (!hasDraftPrice && !hasRowPrice) {
+          next[row.id] = {
+            ...(next[row.id] || {}),
+            prixPerL: gasoilPricePerL,
+          };
+        }
+      }
+      return next;
+    });
+  }, [gasoilPricePerL, gasoilRows, isGasoilSection]);
 
   const getSectionScopeTotal = useCallback(
     (scope, sectionCode) => {
       if (!scope) return 0;
       if (sectionCode === "GASOIL") {
-        return sumGasoilRows(buildGasoilRowsForScope(scope, gasoilPricePerL));
+        return sumGasoilRows(buildGasoilRowsForScope(scope));
       }
       return collectSectionLines(scope, sectionCode).reduce(
-        (sum, line) => sum + Number(line?.total || 0),
+        (sum, line) => sum + Number(line?.total ?? line?.montant_total ?? 0),
         0
       );
     },
-    [buildGasoilRowsForScope, gasoilPricePerL]
+    [buildGasoilRowsForScope]
   );
+
+  const getSalaryScopeTotalByInterface = useCallback((scope, interfaceType) => {
+    if (!scope) return 0;
+    const backendValue =
+      interfaceType === "H"
+        ? Number(scope?.total_masse_salariale_horaire)
+        : Number(scope?.total_masse_salariale_mensuel);
+    if (Number.isFinite(backendValue)) return backendValue;
+
+    const wantedUnit = interfaceType === "H" ? "JOUR" : "MOIS";
+    return collectSectionLines(scope, "MASSE_SALARIALE").reduce((sum, line) => {
+      const lineUnit = normalize(line?.unit ?? line?.unite ?? "");
+      if (lineUnit !== wantedUnit) return sum;
+      return sum + Number(line?.total ?? line?.montant_total ?? 0);
+    }, 0);
+  }, []);
 
   const activeSectionScopeTotal = useMemo(
     () => getSectionScopeTotal(activeScope, activeSection),
@@ -643,6 +876,26 @@ export default function BudgetEditor() {
   const activeSectionTotal = useMemo(
     () => scopes.reduce((sum, scope) => sum + getSectionScopeTotal(scope, activeSection), 0),
     [scopes, activeSection, getSectionScopeTotal]
+  );
+
+  const salaryMonthlyScopeTotal = useMemo(
+    () => getSalaryScopeTotalByInterface(activeScope, "M"),
+    [activeScope, getSalaryScopeTotalByInterface]
+  );
+
+  const salaryMonthlySectionTotal = useMemo(
+    () => scopes.reduce((sum, scope) => sum + getSalaryScopeTotalByInterface(scope, "M"), 0),
+    [scopes, getSalaryScopeTotalByInterface]
+  );
+
+  const salaryHourlyScopeTotal = useMemo(
+    () => getSalaryScopeTotalByInterface(activeScope, "H"),
+    [activeScope, getSalaryScopeTotalByInterface]
+  );
+
+  const salaryHourlySectionTotal = useMemo(
+    () => scopes.reduce((sum, scope) => sum + getSalaryScopeTotalByInterface(scope, "H"), 0),
+    [scopes, getSalaryScopeTotalByInterface]
   );
 
   const filteredCatalogueOtps = useMemo(() => {
@@ -657,6 +910,46 @@ export default function BudgetEditor() {
       })
       ;
   }, [availableCatalogueOtps, articleQuery]);
+
+  const selectSubsection = (value) => {
+    setSubsection(value);
+    setSubsectionQuery(value);
+    lineFormRef.current.subsection = value;
+    setSubsectionPickerOpen(false);
+    setOtpId("");
+    lineFormRef.current.otpId = "";
+    setArticle("");
+    lineFormRef.current.article = "";
+    setArticleQuery("");
+    lineFormRef.current.articleQuery = "";
+    setUnit("");
+    lineFormRef.current.unit = "";
+    setPu("");
+    lineFormRef.current.pu = "";
+    setArticlePickerOpen(false);
+  };
+
+  const onSubsectionQueryChange = (value) => {
+    setSubsectionQuery(value);
+    setSubsectionPickerOpen(true);
+    const exact = availableCatalogueSousSections.find(
+      (item) => normalize(item?.nom_sous_section) === normalize(value)
+    );
+    const nextSubsection = exact?.nom_sous_section || "";
+    setSubsection(nextSubsection);
+    lineFormRef.current.subsection = nextSubsection;
+    setOtpId("");
+    lineFormRef.current.otpId = "";
+    setArticle("");
+    lineFormRef.current.article = "";
+    setArticleQuery("");
+    lineFormRef.current.articleQuery = "";
+    setUnit("");
+    lineFormRef.current.unit = "";
+    setPu("");
+    lineFormRef.current.pu = "";
+    setArticlePickerOpen(false);
+  };
 
   const totalDaysFromMonthly = useMemo(() => {
     return sumYearState(monthlyQtyByYear);
@@ -722,7 +1015,7 @@ export default function BudgetEditor() {
     for (const ss of section.sous_sections || []) {
       for (const line of ss.lignes_otp || []) {
         const detailsState = detailsToYearState(line.details_mensuels || []);
-        out.push({
+        const row = {
           id: line.id,
           otp: line.code_otp,
           subsection: ss.nom,
@@ -735,7 +1028,11 @@ export default function BudgetEditor() {
           detailsQty: "consulter le détail",
           detailsAmounts: "consulter le détail",
           detailsMensuels: line.details_mensuels || [],
-        });
+        };
+        row.montantBrut = calculateLineGrossTotal(row);
+        row.montantNet = calculateLineNetTotal(row);
+        row.remiseRate = calculateLineDiscountRate(row);
+        out.push(row);
       }
     }
     // Les lignes les plus récentes doivent remonter en premier dans le tableau.
@@ -754,6 +1051,7 @@ export default function BudgetEditor() {
   const applyLineToForm = (line) => {
     if (!line) return;
     setSubsection(line.subsection || "");
+    setSubsectionQuery(line.subsection || "");
     lineFormRef.current.subsection = line.subsection || "";
     setArticle(line.article || "");
     lineFormRef.current.article = line.article || "";
@@ -774,7 +1072,10 @@ export default function BudgetEditor() {
     lineFormRef.current.quantite = nextQuantite;
     setPu(line.pu != null ? String(line.pu) : "");
     lineFormRef.current.pu = line.pu != null ? String(line.pu) : "";
-    setRemise("");
+    const nextRemise = calculateLineDiscountRate(line);
+    const nextRemiseText = nextRemise > 0 ? String(roundAmount(nextRemise)) : "";
+    setRemise(nextRemiseText);
+    lineFormRef.current.remise = nextRemiseText;
   };
 
   const currentLineGross = useMemo(() => {
@@ -784,13 +1085,13 @@ export default function BudgetEditor() {
   }, [totalDaysFromMonthly, pu, quantite]);
 
   const currentLineTotal = useMemo(() => {
-    const r = Math.min(100, Math.max(0, Number(remise || 0)));
+    const r = normalizeDiscountRate(remise);
     const discount = currentLineGross * (r / 100);
     return Math.max(0, currentLineGross - discount);
   }, [currentLineGross, remise]);
 
   const currentLineDiscount = useMemo(() => {
-    const r = Math.min(100, Math.max(0, Number(remise || 0)));
+    const r = normalizeDiscountRate(remise);
     return Math.max(0, currentLineGross * (r / 100));
   }, [currentLineGross, remise]);
 
@@ -838,6 +1139,7 @@ export default function BudgetEditor() {
 
         await updateLigneOtp(line.id, {
           code_otp: line.codeOtp || line.otp || "-",
+          section: "GASOIL",
           designation: line.article || "",
           unite: "L",
           nombre_jours: nombreJours,
@@ -846,21 +1148,29 @@ export default function BudgetEditor() {
           montant_total: montantTotal,
           heures_marche: nextHeuresMarche,
           consommation_l_h: nextConsommationLH,
-          details_mensuels: cloneDetailsMensuels(line.detailsMensuels),
+          details_mensuels: stripDetailAmounts(line.detailsMensuels),
         });
       } else {
         const nombreJours = Number(line.nombreJours || 0);
-        const montantTotal = nombreJours * nextQty * nextPu;
+        const remiseRate = normalizeDiscountRate(line.remiseRate);
+        const grossTotal = nombreJours * nextQty * nextPu;
+        const montantTotal = roundAmount(grossTotal * (1 - remiseRate / 100));
+        const detailState = detailsToYearState(line.detailsMensuels || []);
 
         await updateLigneOtp(line.id, {
           code_otp: line.otp || line.codeOtp || "-",
+          section: sectionCode,
           designation: line.article || "",
           unite: line.unit || "Jour/Mois",
           quantite_globale: nextQty,
           prix_unitaire: nextPu,
           montant_total: montantTotal,
           nombre_jours: nombreJours,
-          details_mensuels: cloneDetailsMensuels(line.detailsMensuels),
+          details_mensuels: yearStateToDetails(detailState, {
+            unitPrice: nextPu,
+            quantity: nextQty,
+            remiseRate,
+          }),
         });
       }
 
@@ -908,8 +1218,10 @@ export default function BudgetEditor() {
           current &&
           materialSousSections.some((item) => item.nom_sous_section === current)
         ) {
+          setSubsectionQuery(current);
           return current;
         }
+        setSubsectionQuery("");
         return "";
       });
       return;
@@ -918,6 +1230,7 @@ export default function BudgetEditor() {
     if (!activeCatalogueSection) {
       setCatalogueSousSections([]);
       setSubsection("");
+      setSubsectionQuery("");
       return;
     }
     (async () => {
@@ -926,6 +1239,7 @@ export default function BudgetEditor() {
         const list = Array.isArray(ss) ? ss : [];
         setCatalogueSousSections(list);
         setSubsection("");
+        setSubsectionQuery("");
       } catch (e) {
         setError(e?.message || "Erreur API (catalogue sous-sections)");
       }
@@ -1123,19 +1437,30 @@ export default function BudgetEditor() {
         ? snapshot.monthlyQtyDraftByYear
         : monthlyQtyDraftByYear;
     const q = Number(parseFlexibleNumber(snapshot.quantite || quantite) || 0);
-    const r = Math.min(100, Math.max(0, Number(remise || 0)));
+    const r = normalizeDiscountRate(snapshot.remise ?? remise);
     const effectiveArticle = String(snapshot.article || article || "").trim();
     const effectiveUnit = "Jour/Mois";
     const effectivePu = parseFlexibleNumber(snapshot.pu || pu);
     const effectiveNombreJours = Math.max(0, Math.floor(sumYearState(effectiveYearState)));
     const effectiveSubsection = String(snapshot.subsection || subsection || "").trim();
     const effectiveOtpId = String(snapshot.otpId || otpId || "");
+    const materialCatalogueSubsection = availableCatalogueSousSections.find(
+      (item) => item.nom_sous_section === effectiveSubsection
+    );
+    const matchedMaterialOtp =
+      availableCatalogueOtps.find((o) => String(o.id) === effectiveOtpId) ||
+      availableCatalogueOtps.find((o) => normalize(o.designation) === normalize(effectiveArticle)) ||
+      null;
 
     if (!effectiveSubsection || !effectiveArticle || !effectiveUnit || !Number.isFinite(effectivePu) || q <= 0) {
       alert("Veuillez remplir l'article, la quantité, le P.U et les détails des jours.");
       return;
     }
-    if (isMaterialSection && !availableCatalogueOtps.find((o) => String(o.id) === effectiveOtpId)) {
+    if (isMaterialSection && !materialCatalogueSubsection) {
+      alert("Veuillez choisir une sous-section existante dans la liste Matériel.");
+      return;
+    }
+    if (isMaterialSection && !matchedMaterialOtp) {
       alert("Veuillez choisir un article existant dans la liste.");
       return;
     }
@@ -1172,18 +1497,21 @@ export default function BudgetEditor() {
       }
 
       // 2) créer la ligne OTP en DB
-      const foundOtp = availableCatalogueOtps.find(
-        (o) => String(o.id) === effectiveOtpId
-      );
+      const foundOtp = matchedMaterialOtp;
       const payload = {
         code_otp: foundOtp?.code_otp || "-",
-        designation: effectiveArticle,
+        section: targetSectionCode,
+        designation: foundOtp?.designation || effectiveArticle,
         unite: effectiveUnit,
         quantite_globale: q,
         prix_unitaire: effectivePu,
-        montant_total: Number((q * effectivePu * effectiveNombreJours * (1 - r / 100)).toFixed(2)),
+        montant_total: roundAmount(q * effectivePu * effectiveNombreJours * (1 - r / 100)),
         nombre_jours: effectiveNombreJours,
-        details_mensuels: yearStateToDetails(effectiveYearState),
+        details_mensuels: yearStateToDetails(effectiveYearState, {
+          unitPrice: effectivePu,
+          quantity: q,
+          remiseRate: r,
+        }),
       };
       if (editingLineId) {
         await updateLigneOtp(editingLineId, payload);
@@ -1195,6 +1523,8 @@ export default function BudgetEditor() {
       await refreshBudget();
 
       setSubsection("");
+      setSubsectionQuery("");
+      lineFormRef.current.subsection = "";
       setArticle("");
       setArticleQuery("");
       setOtpId("");
@@ -1204,6 +1534,7 @@ export default function BudgetEditor() {
       lineFormRef.current.quantite = "1";
       setPu("");
       setRemise("");
+      lineFormRef.current.remise = "";
       setMonthlyQtyByYear({});
       setMonthlyQtyDraftByYear({});
       setModalYears([]);
@@ -1241,13 +1572,10 @@ export default function BudgetEditor() {
 
     const rowsToPersist = gasoilRows.map((row) => {
       const draft = inlineLineDrafts[row.id] || {};
-      const defaultPriceRaw = gasoilPricePerL;
       const rowPriceRaw = draft.prixPerL ?? row.prixPerL;
       const effectivePriceRaw =
         rowPriceRaw === "" || rowPriceRaw == null
-          ? defaultPriceRaw === "" || defaultPriceRaw == null
-            ? null
-            : Number(defaultPriceRaw)
+          ? null
           : Number(rowPriceRaw);
       return cloneGasoilRowSnapshot({
         ...row,
@@ -1316,6 +1644,7 @@ export default function BudgetEditor() {
 
   const openMonthlyModal = (mode = "create", line = null) => {
     setModalMode(mode);
+    setModalHasUserChanges(false);
     if (mode !== "edit") {
       setLineSectionOverride("");
     }
@@ -1357,15 +1686,56 @@ export default function BudgetEditor() {
 
   const modalQty = monthlyQtyDraftByYear[Number(activeModalYear)] || emptyMonthlyQty();
   const totalDaysInModal = sumYearState({ [activeModalYear]: modalQty });
-  const monthlyAmountsInModal = MONTHS.map((m) => ({
-    ...m,
-    qty: Number(modalQty[m.key] || 0),
-    amount:
-      Number(modalQty[m.key] || 0) * Number(pu || 0) * Math.max(0, Number(quantite || 0)),
+  const activeEditingLine = useMemo(
+    () =>
+      filteredLines.find((line) => Number(line?.id || 0) === Number(editingLineId || 0)) || null,
+    [filteredLines, editingLineId]
+  );
+  const monthlyAmountsInModal = MONTHS.map((m) => {
+    const qty = Number(modalQty[m.key] || 0);
+    const fallbackGross = roundAmount(qty * Number(pu || 0) * Math.max(0, Number(quantite || 0)));
+    const fallbackNet = roundAmount(fallbackGross * (1 - normalizeDiscountRate(remise) / 100));
+
+    const shouldUseBackendValues =
+      isMaterialSection &&
+      (modalMode === "view" || (modalMode === "edit" && !modalHasUserChanges)) &&
+      activeEditingLine;
+
+    if (shouldUseBackendValues) {
+      const detail = (activeEditingLine.detailsMensuels || []).find(
+        (item) =>
+          Number(item?.annee || 0) === Number(activeModalYear || 0) &&
+          Number(item?.mois || 0) === Number(m.month)
+      );
+      if (detail) {
+        const apiGross = Number(detail?.montant_brut);
+        const apiNet = Number(detail?.montant_net);
+        return {
+          ...m,
+          qty,
+          gross: Number.isFinite(apiGross) ? apiGross : fallbackGross,
+          net: Number.isFinite(apiNet) ? apiNet : fallbackNet,
+        };
+      }
+    }
+
+    return { ...m, qty, gross: fallbackGross, net: fallbackNet };
+  });
+  const materialFallbackNetByMonth = buildNetAmountsFromGross(
+    monthlyAmountsInModal.map((entry) => entry.gross),
+    remise
+  );
+  const monthlyAmountsWithNet = monthlyAmountsInModal.map((entry, index) => ({
+    ...entry,
+    net:
+      isMaterialSection && (!activeEditingLine || !(modalMode === "view" || (modalMode === "edit" && !modalHasUserChanges)))
+        ? materialFallbackNetByMonth[index] ?? 0
+        : entry.net,
   }));
-  const grossInModal = monthlyAmountsInModal.reduce((sum, m) => sum + m.amount, 0);
-  const discountInModal = grossInModal * (Math.min(100, Math.max(0, Number(remise || 0))) / 100);
-  const netInModal = Math.max(0, grossInModal - discountInModal);
+  const grossInModal = monthlyAmountsWithNet.reduce((sum, m) => sum + m.gross, 0);
+  const netInModal = isMaterialSection
+    ? roundAmount(grossInModal * (1 - normalizeDiscountRate(remise) / 100))
+    : monthlyAmountsWithNet.reduce((sum, m) => sum + m.net, 0);
   const modalTitle =
     modalMode === "view"
       ? "Consulter les jours/mois"
@@ -1429,22 +1799,82 @@ export default function BudgetEditor() {
     return (
       <div className="budget-page gasoil-page">
         <div className="budget-top-tabs">
-          {SECTION_OPTIONS.map((s) => (
-            <button
-              key={s.code}
-              type="button"
-              className={`budget-tab ${activeSection === s.code ? "active" : ""}`}
-              onClick={() => setActiveSection(s.code)}
-            >
-              {(() => {
-                const Icon = SECTION_TAB_ICONS[s.code] || FiLayers;
-                return <Icon aria-hidden="true" />;
-              })()}
-              {s.label}
-            </button>
-          ))}
+          {SECTION_OPTIONS.map((s) => {
+            const Icon = SECTION_TAB_ICONS[s.code] || FiLayers;
+            if (s.code === "MASSE_SALARIALE") {
+              return (
+                <div key={s.code}>
+                  <button
+                    ref={salaryTabButtonRef}
+                    type="button"
+                    className={`budget-tab ${activeSection === s.code ? "active" : ""}`}
+                    onClick={toggleSalaryPanel}
+                  >
+                    <Icon aria-hidden="true" />
+                    {s.label}
+                    <FiChevronDown
+                      aria-hidden="true"
+                      style={{
+                        marginLeft: 6,
+                        transform: salaryDropdownOpen ? "rotate(180deg)" : "rotate(0deg)",
+                        transition: "transform 0.2s ease",
+                      }}
+                    />
+                  </button>
+                </div>
+              );
+            }
+            return (
+              <button
+                key={s.code}
+                type="button"
+                className={`budget-tab ${activeSection === s.code ? "active" : ""}`}
+                onClick={() => {
+                  setActiveSection(s.code);
+                  setSalaryDropdownOpen(false);
+                }}
+              >
+                <Icon aria-hidden="true" />
+                {s.label}
+              </button>
+            );
+          })}
         </div>
-
+        {salaryDropdownOpen && (
+          <div
+            style={{
+              position: "fixed",
+              top: salaryDropdownPosition.top,
+              left: salaryDropdownPosition.left,
+              width: 260,
+              background:
+                "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(246,250,255,0.98) 100%)",
+              border: "1px solid rgba(148, 163, 184, 0.28)",
+              borderRadius: 14,
+              boxShadow: "0 18px 40px rgba(2, 6, 23, 0.2)",
+              backdropFilter: "blur(6px)",
+              padding: 10,
+              zIndex: 2000,
+            }}
+          >
+            <button
+              type="button"
+              className="btn-sm"
+              onClick={() => selectSalaryInterface("M")}
+              style={{ ...salaryDropdownButtonStyle(salaryInterface === "M"), marginBottom: 6 }}
+            >
+              Mensuel
+            </button>
+            <button
+              type="button"
+              className="btn-sm"
+              onClick={() => selectSalaryInterface("H")}
+              style={salaryDropdownButtonStyle(salaryInterface === "H")}
+            >
+              Horaire
+            </button>
+          </div>
+        )}
         <div className="budget-content gasoil-content">
           <div className="budget-sidebar">
             <div className="budget-card-title budget-card-title-with-action">
@@ -1520,7 +1950,7 @@ export default function BudgetEditor() {
             </div>
           </div>
 
-          <div className="budget-main gasoil-main">
+          <div id="main-content" className="budget-main gasoil-main">
             <div className="budget-form-card gasoil-toolbar-card">
               <div className="budget-form-row budget-form-row-top gasoil-toolbar-row">
                 <div className="budget-field-group budget-field-group-wide">
@@ -1545,9 +1975,7 @@ export default function BudgetEditor() {
                     min={0}
                     step="0.01"
                     value={gasoilPricePerL}
-                    onChange={(e) => {
-                      setGasoilPricePerL(e.target.value);
-                    }}
+                    onChange={(e) => handleGasoilPricePerLChange(e.target.value)}
                   />
                 </div>
               </div>
@@ -1566,16 +1994,66 @@ export default function BudgetEditor() {
                 </colgroup>
                 <thead>
                   <tr>
-                    <th>Sous section</th>
-                    <th>Article</th>
-                    <th>Nombre de matériels</th>
-                    <th>Total des jours</th>
-                    <th>Heures marche</th>
-                    <th>Consommation L/H</th>
-                    <th>Consommation journalière en L</th>
-                    <th>Prix de L en DH</th>
-                    <th>Montant total</th>
-                    <th>Détail des montants</th>
+                    <th>
+                      <span className="budget-th-label">
+                        <FiLayers aria-hidden="true" />
+                        <span>Sous section</span>
+                      </span>
+                    </th>
+                    <th>
+                      <span className="budget-th-label">
+                        <FiFile aria-hidden="true" />
+                        <span>Article</span>
+                      </span>
+                    </th>
+                    <th>
+                      <span className="budget-th-label">
+                        <FiTool aria-hidden="true" />
+                        <span>Nombre de matériels</span>
+                      </span>
+                    </th>
+                    <th>
+                      <span className="budget-th-label">
+                        <FiCalendar aria-hidden="true" />
+                        <span>Total des jours</span>
+                      </span>
+                    </th>
+                    <th>
+                      <span className="budget-th-label">
+                        <FiCalendar aria-hidden="true" />
+                        <span>Heures marche</span>
+                      </span>
+                    </th>
+                    <th>
+                      <span className="budget-th-label">
+                        <FiDroplet aria-hidden="true" />
+                        <span>Consommation L/H</span>
+                      </span>
+                    </th>
+                    <th>
+                      <span className="budget-th-label">
+                        <FiTrendingUp aria-hidden="true" />
+                        <span>Consommation journalière en L</span>
+                      </span>
+                    </th>
+                    <th>
+                      <span className="budget-th-label">
+                        <FiDollarSign aria-hidden="true" />
+                        <span>Prix de L en DH</span>
+                      </span>
+                    </th>
+                    <th>
+                      <span className="budget-th-label">
+                        <FiTrendingUp aria-hidden="true" />
+                        <span>Montant total</span>
+                      </span>
+                    </th>
+                    <th>
+                      <span className="budget-th-label">
+                        <FiTable aria-hidden="true" />
+                        <span>Détail des montants</span>
+                      </span>
+                    </th>
                   </tr>
                 </thead>
               </table>
@@ -1640,7 +2118,7 @@ export default function BudgetEditor() {
                                 getInlineLineValue(
                                   row.id,
                                   "prixPerL",
-                                  row.isPersisted ? row.prixPerL ?? "" : row.prixPerL ?? gasoilPricePerL ?? ""
+                                  row.prixPerL ?? ""
                                 )
                               )}
                               onChange={(e) => setInlineLineField(row.id, "prixPerL", e.target.value)}
@@ -1661,11 +2139,7 @@ export default function BudgetEditor() {
                                   getInlineLineValue(
                                     row.id,
                                     "prixPerL",
-                                    row.isPersisted
-                                      ? row.prixPerL ?? ""
-                                      : gasoilPricePerL !== ""
-                                      ? gasoilPricePerL
-                                      : row.prixPerL ?? ""
+                                    row.prixPerL ?? ""
                                   ) || 0
                                 )
                             )}{" "}
@@ -1843,13 +2317,13 @@ export default function BudgetEditor() {
                       })}
                   </tbody>
                   </table>
-                  <div className="gasoil-modal-total" style={{ marginTop: 10 }}>
-                    <span className="gasoil-modal-emphasis-label">Total des jours</span>
+                  <div className="budget-modal-total-pill" style={{ marginTop: 10 }}>
+                    <span className="gasoil-modal-emphasis-label">Total des jours: </span>
                     <b className="gasoil-modal-emphasis-value">{formatAmount(sumMonthlyQty(gasoilDetailModalQty))}</b>
                   </div>
                 </div>
                 <div className="gasoil-modal-card gasoil-modal-card-detailed">
-                  <h5 className="gasoil-modal-emphasis-title">Montant total</h5>
+                  <h5>Montant total</h5>
                   <table className="gasoil-modal-table">
                     <tbody>
                       {[0, 1, 2].map((rowIdx) => {
@@ -1895,8 +2369,8 @@ export default function BudgetEditor() {
                       <b>{formatAmount(gasoilDetailLine.prixPerL ?? gasoilPricePerL ?? 0)}</b>
                     </div>
                   </div>
-                  <div className="gasoil-modal-total gasoil-modal-total-emphasis">
-                    <span className="gasoil-modal-emphasis-label">Montant total</span>
+                  <div className="budget-modal-total-pill budget-modal-total-pill-amount">
+                    <span className="gasoil-modal-emphasis-label">Montant total: </span>
                     <b className="gasoil-modal-emphasis-value">{formatAmount(gasoilDetailTotalAmount)} DH</b>
                   </div>
                 </div>
@@ -1911,22 +2385,82 @@ export default function BudgetEditor() {
   return (
     <div className="budget-page">
       <div className="budget-top-tabs">
-        {SECTION_OPTIONS.map((s) => (
-          <button
-            key={s.code}
-            type="button"
-            className={`budget-tab ${activeSection === s.code ? "active" : ""}`}
-            onClick={() => setActiveSection(s.code)}
-          >
-            {(() => {
-              const Icon = SECTION_TAB_ICONS[s.code] || FiLayers;
-              return <Icon aria-hidden="true" />;
-            })()}
-            {s.label}
-          </button>
-        ))}
+        {SECTION_OPTIONS.map((s) => {
+          const Icon = SECTION_TAB_ICONS[s.code] || FiLayers;
+          if (s.code === "MASSE_SALARIALE") {
+            return (
+              <div key={s.code}>
+                <button
+                  ref={salaryTabButtonRef}
+                  type="button"
+                  className={`budget-tab ${activeSection === s.code ? "active" : ""}`}
+                  onClick={toggleSalaryPanel}
+                >
+                  <Icon aria-hidden="true" />
+                  {s.label}
+                  <FiChevronDown
+                    aria-hidden="true"
+                    style={{
+                      marginLeft: 6,
+                      transform: salaryDropdownOpen ? "rotate(180deg)" : "rotate(0deg)",
+                      transition: "transform 0.2s ease",
+                    }}
+                  />
+                </button>
+              </div>
+            );
+          }
+          return (
+            <button
+              key={s.code}
+              type="button"
+              className={`budget-tab ${activeSection === s.code ? "active" : ""}`}
+              onClick={() => {
+                setActiveSection(s.code);
+                setSalaryDropdownOpen(false);
+              }}
+            >
+              <Icon aria-hidden="true" />
+              {s.label}
+            </button>
+          );
+        })}
       </div>
-
+      {salaryDropdownOpen && (
+        <div
+          style={{
+            position: "fixed",
+            top: salaryDropdownPosition.top,
+            left: salaryDropdownPosition.left,
+            width: 260,
+            background:
+              "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(246,250,255,0.98) 100%)",
+            border: "1px solid rgba(148, 163, 184, 0.28)",
+            borderRadius: 14,
+            boxShadow: "0 18px 40px rgba(2, 6, 23, 0.2)",
+            backdropFilter: "blur(6px)",
+            padding: 10,
+            zIndex: 2000,
+          }}
+        >
+          <button
+            type="button"
+            className="btn-sm"
+            onClick={() => selectSalaryInterface("M")}
+            style={{ ...salaryDropdownButtonStyle(salaryInterface === "M"), marginBottom: 6 }}
+          >
+            Mensuel
+          </button>
+          <button
+            type="button"
+            className="btn-sm"
+            onClick={() => selectSalaryInterface("H")}
+            style={salaryDropdownButtonStyle(salaryInterface === "H")}
+          >
+            Horaire
+          </button>
+        </div>
+      )}
       <div className="budget-content">
         <div className="budget-sidebar">
           <div className="budget-card-title budget-card-title-with-action">
@@ -2002,7 +2536,41 @@ export default function BudgetEditor() {
           </div>
         </div>
 
-        <div className="budget-main">
+        <div id="main-content" className="budget-main">
+          {isSalarySection ? (
+            !salaryInterface ? (
+              <></>
+            ) : salaryInterface === "M" ? (
+              <SalarySection
+                activeScope={activeScope}
+                scopeYears={scopeYears}
+                ensureActiveSectionInScope={ensureActiveSectionInScope}
+                refreshBudget={refreshBudget}
+                activeSectionScopeTotal={activeSectionScopeTotal}
+                activeSectionTotal={activeSectionTotal}
+                salaryMonthlyScopeTotal={salaryMonthlyScopeTotal}
+                lastSavedAt={lastSavedAt}
+                onSave={onSave}
+                onValidate={onValidate}
+                formatAmount={formatAmount}
+              />
+            ) : (
+              <SalarySectionHoraire
+                activeScope={activeScope}
+                scopeYears={scopeYears}
+                ensureActiveSectionInScope={ensureActiveSectionInScope}
+                refreshBudget={refreshBudget}
+                activeSectionScopeTotal={activeSectionScopeTotal}
+                activeSectionTotal={activeSectionTotal}
+                salaryHourlyScopeTotal={salaryHourlyScopeTotal}
+                lastSavedAt={lastSavedAt}
+                onSave={onSave}
+                onValidate={onValidate}
+                formatAmount={formatAmount}
+              />
+            )
+          ) : (
+          <>
           <form className="budget-grid budget-form-card" onSubmit={handleAddSubmit} onKeyDown={(e) => {
             if (e.key === 'Enter' && e.target.tagName !== 'TEXTAREA') {
               e.preventDefault();
@@ -2011,34 +2579,83 @@ export default function BudgetEditor() {
             <div className="budget-form-row budget-form-row-top">
               <div className="budget-field-group budget-field-group-wide">
                 <label className="budget-label">Sous-section</label>
-                <select
-                  value={subsection}
-                  onChange={(e) => {
-                    const nextValue = e.target.value;
-                    setSubsection(e.target.value);
-                    lineFormRef.current.subsection = nextValue;
-                    setOtpId("");
-                    lineFormRef.current.otpId = "";
-                    setArticle("");
-                    lineFormRef.current.article = "";
-                    setArticleQuery("");
-                    lineFormRef.current.articleQuery = "";
-                    setUnit("");
-                    lineFormRef.current.unit = "";
-                    setPu("");
-                    lineFormRef.current.pu = "";
-                    setArticlePickerOpen(false);
-                  }}
-                >
-                  <option value="" disabled hidden>
-                    Choisir sous-section
-                  </option>
-                  {availableCatalogueSousSections.map((x) => (
-                    <option key={x.id || x.nom_sous_section} value={x.nom_sous_section}>
-                      {x.nom_sous_section}
+                {isMaterialSection ? (
+                  <div className="article-input-wrap" ref={subsectionWrapRef}>
+                    <input
+                      type="text"
+                      value={subsectionQuery}
+                      onChange={(e) => onSubsectionQueryChange(e.target.value)}
+                      onClick={() => setSubsectionPickerOpen(true)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          e.stopPropagation();
+                        }
+                      }}
+                      placeholder="Rechercher une sous-section"
+                      aria-label="Rechercher une sous-section"
+                      aria-autocomplete="list"
+                    />
+                    <button
+                      type="button"
+                      className="article-filter-btn"
+                      onClick={() => setSubsectionPickerOpen((prev) => !prev)}
+                      onMouseDown={(e) => e.preventDefault()}
+                      aria-label="Afficher les sous-sections"
+                      title="Afficher les sous-sections"
+                    >
+                      {subsectionQuery ? <FiSearch aria-hidden="true" /> : <FiChevronDown aria-hidden="true" />}
+                    </button>
+                    {subsectionPickerOpen && (
+                      <div className="article-picker">
+                        {filteredCatalogueSousSections.length > 0 ? (
+                          filteredCatalogueSousSections.map((x) => (
+                            <button
+                              key={x.id || x.nom_sous_section}
+                              type="button"
+                              className="article-picker-item"
+                              onMouseDown={(e) => e.preventDefault()}
+                              onClick={() => selectSubsection(x.nom_sous_section)}
+                            >
+                              <span>{x.nom_sous_section}</span>
+                            </button>
+                          ))
+                        ) : (
+                          <div className="article-picker-empty">Aucune sous-section existante</div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <select
+                    value={subsection}
+                    onChange={(e) => {
+                      const nextValue = e.target.value;
+                      setSubsection(e.target.value);
+                      lineFormRef.current.subsection = nextValue;
+                      setOtpId("");
+                      lineFormRef.current.otpId = "";
+                      setArticle("");
+                      lineFormRef.current.article = "";
+                      setArticleQuery("");
+                      lineFormRef.current.articleQuery = "";
+                      setUnit("");
+                      lineFormRef.current.unit = "";
+                      setPu("");
+                      lineFormRef.current.pu = "";
+                      setArticlePickerOpen(false);
+                    }}
+                  >
+                    <option value="" disabled hidden>
+                      Choisir sous-section
                     </option>
-                  ))}
-                </select>
+                    {availableCatalogueSousSections.map((x) => (
+                      <option key={x.id || x.nom_sous_section} value={x.nom_sous_section}>
+                        {x.nom_sous_section}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
               <div className="budget-field-group budget-field-group-wide">
                 <label className="budget-label">Article</label>
@@ -2111,12 +2728,14 @@ export default function BudgetEditor() {
                     const v = e.target.value;
                     if (v === '') {
                       setRemise('');
+                      lineFormRef.current.remise = '';
                       return;
                     }
                     const n = Number(v);
                     if (Number.isNaN(n)) return;
                     const nextValue = String(Math.min(100, Math.max(0, n)));
                     setRemise(nextValue);
+                    lineFormRef.current.remise = nextValue;
                   }}
                 />
               </div>
@@ -2237,8 +2856,18 @@ export default function BudgetEditor() {
                       <span>MontantTotal</span>
                     </span>
                   </th>
-                  <th>Détail des montants</th>
-                  <th>Action</th>
+                  <th>
+                    <span className="budget-th-label">
+                      <FiTable aria-hidden="true" />
+                      <span>Détail des montants</span>
+                    </span>
+                  </th>
+                  <th>
+                    <span className="budget-th-label">
+                      <FiList aria-hidden="true" />
+                      <span>Action</span>
+                    </span>
+                  </th>
                 </tr>
               </thead>
             </table>
@@ -2288,9 +2917,12 @@ export default function BudgetEditor() {
                         <b>
                           {formatAmount(
                             activeSection === "MATERIEL"
-                              ? Number(l.nombreJours ?? 0) *
-                                  Number(getInlineLineValue(l.id, "qty", l.qty ?? 0) || 0) *
-                                  Number(getInlineLineValue(l.id, "pu", l.pu ?? 0) || 0)
+                              ? roundAmount(
+                                  Number(l.nombreJours ?? 0) *
+                                    Number(getInlineLineValue(l.id, "qty", l.qty ?? 0) || 0) *
+                                    Number(getInlineLineValue(l.id, "pu", l.pu ?? 0) || 0) *
+                                    (1 - normalizeDiscountRate(l.remiseRate) / 100)
+                                )
                               : l.total
                           )}
                         </b>
@@ -2371,6 +3003,8 @@ export default function BudgetEditor() {
               </button>
             </div>
           </div>
+          </>
+          )}
         </div>
       </div>
       {showMonthlyModal && (
@@ -2470,6 +3104,7 @@ export default function BudgetEditor() {
                                     value={modalQty[m.key]}
                                     onChange={(e) =>
                                       setMonthlyQtyDraftByYear((prev) => {
+                                        setModalHasUserChanges(true);
                                         const next = {
                                           ...prev,
                                           [Number(activeModalYear)]: {
@@ -2492,7 +3127,7 @@ export default function BudgetEditor() {
                     })}
                   </tbody>
                 </table>
-                <div style={{ textAlign: "center", marginTop: 8 }}>
+                <div className="budget-modal-total-pill">
                   <span className="gasoil-modal-emphasis-label">Total des jours:</span>{" "}
                   <b className="gasoil-modal-emphasis-value">{formatAmount(totalDaysInModal)}</b>
                 </div>
@@ -2536,36 +3171,73 @@ export default function BudgetEditor() {
                           </tr>
                           <tr>
                             {rowMonths.map((m) => {
-                              const monthAmount =
-                                monthlyAmountsInModal.find((x) => x.key === m.key)?.amount || 0;
-                              return <td key={`amt-cell-${m.key}`}>{formatAmount(monthAmount)}</td>;
+                              const monthAmount = isMaterialSection
+                                ? monthlyAmountsWithNet.find((x) => x.key === m.key)?.gross || 0
+                                : monthlyAmountsWithNet.find((x) => x.key === m.key)?.gross || 0;
+                              return (
+                                <td key={`amt-brut-cell-${m.key}`}>
+                                  {!isMaterialSection && (
+                                    <>
+                                      <small>Brut</small>
+                                      <br />
+                                    </>
+                                  )}
+                                  {formatAmount(monthAmount)}
+                                </td>
+                              );
                             })}
                           </tr>
+                          {!isMaterialSection && (
+                            <tr>
+                              {rowMonths.map((m) => {
+                                const monthAmount =
+                                  monthlyAmountsWithNet.find((x) => x.key === m.key)?.net || 0;
+                                return (
+                                  <td key={`amt-net-cell-${m.key}`}>
+                                    <small>Net</small>
+                                    <br />
+                                    {formatAmount(monthAmount)}
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          )}
                         </React.Fragment>
                       );
                     })}
                   </tbody>
                 </table>
-                <div style={{ textAlign: "center", marginTop: 8, color: "var(--primary-dark)" }}>
-                  Total montants brut: <b>{formatAmount(grossInModal)} DH</b>
+                <div className="budget-modal-total-pill budget-modal-total-pill-amount">
+                  <span className="gasoil-modal-emphasis-label">Total montants brut:</span>{" "}
+                  <b className="gasoil-modal-emphasis-value">
+                    {formatAmount(grossInModal)} DH
+                  </b>
                 </div>
-                <div style={{ textAlign: "center", color: "var(--primary-dark)" }}>
-                  Total montants net: <b>{formatAmount(netInModal)} DH</b>
+                <div className="budget-modal-total-pill budget-modal-total-pill-amount">
+                  <span className="gasoil-modal-emphasis-label">Total montants net:</span>{" "}
+                  <b className="gasoil-modal-emphasis-value">{formatAmount(netInModal)} DH</b>
                 </div>
               </div>
             </div>
             <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
-
-              <button
-                type="button"
-                className="btn-sm btn-secondary"
-                onClick={onCancelMonthlyModal}
-              >
-                Annuler
-              </button>
-              <button type="button" className="btn-sm" onClick={onConfirmMonthlyModal}>
-                Valider
-              </button>
+              {modalMode === "view" ? (
+                <button type="button" className="btn-sm" onClick={onCancelMonthlyModal}>
+                  Fermer
+                </button>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="btn-sm btn-secondary"
+                    onClick={onCancelMonthlyModal}
+                  >
+                    Annuler
+                  </button>
+                  <button type="button" className="btn-sm" onClick={onConfirmMonthlyModal}>
+                    Valider
+                  </button>
+                </>
+              )}
             </div>
           </div>
         </div>
@@ -2573,3 +3245,5 @@ export default function BudgetEditor() {
     </div>
   );
 }
+
+

@@ -107,6 +107,16 @@ export const deleteProject = async (projectId) => {
   }
 };
 
+export const duplicateProject = async (projectId) => {
+  try {
+    const response = await axios.post(`${API_URL}/projects/${projectId}/duplicate`);
+    return response.data;
+  } catch (error) {
+    console.error("âŒ API error:", error.response?.data || error.message);
+    throw new Error(apiErrorMessage(error));
+  }
+};
+
 export const validateProject = async (projectId) => {
   try {
     const response = await axios.patch(`${API_URL}/projects/${projectId}/validate`);

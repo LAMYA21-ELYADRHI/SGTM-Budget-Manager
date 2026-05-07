@@ -28,6 +28,13 @@ const cloneDetailsMensuels = (details) =>
     ? details.map((detail) => ({ ...(detail || {}) }))
     : [];
 
+const stripDetailAmounts = (details) =>
+  (Array.isArray(details) ? details : []).map((detail) => ({
+    mois: Number(detail?.mois || 0),
+    annee: Number(detail?.annee || 0),
+    quantite: Number(detail?.quantite || 0),
+  }));
+
 const GASOIL_SOURCE_PREFIX = "MATSRC:";
 
 const encodeSourceMaterialLineId = (value) =>
@@ -163,6 +170,7 @@ export const sumGasoilRows = (rows) =>
 
 export const serializeGasoilRowToPayload = (row) => ({
   code_otp: encodeSourceMaterialLineId(row?.sourceMaterialLineId || row?.materialLine?.id || row?.id || row?.codeOtp || "-"),
+  section: "GASOIL",
   designation: row?.article || "",
   unite: "L",
   nombre_jours: Number(row?.nombreJours || 1),
@@ -172,5 +180,5 @@ export const serializeGasoilRowToPayload = (row) => ({
   montant_total: Number(row?.montantTotal || 0),
   heures_marche: Number(row?.heuresMarche || 0),
   consommation_l_h: Number(row?.consommationLH || 0),
-  details_mensuels: cloneDetailsMensuels(row?.detailsMensuels),
+  details_mensuels: stripDetailAmounts(row?.detailsMensuels),
 });

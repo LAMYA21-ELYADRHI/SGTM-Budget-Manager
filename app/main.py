@@ -5,9 +5,15 @@ from app.models.project import Project
 from app.routes.project import router as project_router
 from app.routes.budget import router as budget_router
 from sqlalchemy import text
-from app.models import budget  # important pour créer tables
-from app.models.budget import CatalogueSection, Scope
+from app.models import budget  # important pour crÃ©er tables
+from app.models import analytics  # important pour crÃ©er tables analytiques
+from app.models.budget import CatalogueSection, Scope, CsvCatalogue, CsvCatalogueRow
+from app.models.analytics import DimCostType, DimDate, date_to_key
 from sqlalchemy.orm import Session
+from datetime import datetime, date
+from pathlib import Path
+import csv
+import json
 
 app = FastAPI()
 
@@ -20,7 +26,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-#  créer les tables dans SQLite
+#  crÃ©er les tables dans SQLite
 Base.metadata.create_all(bind=engine)
 
 # Mini-migration SQLite: ajouter des colonnes si absentes
@@ -43,6 +49,18 @@ with engine.begin() as conn:
     scope_col_names = {row[1] for row in scope_cols}
     if "section_id" not in scope_col_names:
         conn.execute(text("ALTER TABLE scopes ADD COLUMN section_id INTEGER NULL"))
+    if "total_masse_salariale_mensuel" not in scope_col_names:
+        conn.execute(
+            text(
+                "ALTER TABLE scopes ADD COLUMN total_masse_salariale_mensuel FLOAT NOT NULL DEFAULT 0"
+            )
+        )
+    if "total_masse_salariale_horaire" not in scope_col_names:
+        conn.execute(
+            text(
+                "ALTER TABLE scopes ADD COLUMN total_masse_salariale_horaire FLOAT NOT NULL DEFAULT 0"
+            )
+        )
     ligne_cols = conn.execute(text("PRAGMA table_info(lignes_otp)")).fetchall()
     ligne_col_names = {row[1] for row in ligne_cols}
     if "nombre_jours" not in ligne_col_names:
@@ -56,6 +74,20 @@ with engine.begin() as conn:
     if "consommation_l_h" not in ligne_col_names:
         conn.execute(
             text("ALTER TABLE lignes_otp ADD COLUMN consommation_l_h FLOAT NOT NULL DEFAULT 0")
+        )
+    if "section" not in ligne_col_names:
+        conn.execute(
+            text("ALTER TABLE lignes_otp ADD COLUMN section TEXT NOT NULL DEFAULT ''")
+        )
+    detail_cols = conn.execute(text("PRAGMA table_info(details_mensuels)")).fetchall()
+    detail_col_names = {row[1] for row in detail_cols}
+    if "montant_brut" not in detail_col_names:
+        conn.execute(
+            text("ALTER TABLE details_mensuels ADD COLUMN montant_brut FLOAT NOT NULL DEFAULT 0")
+        )
+    if "montant_net" not in detail_col_names:
+        conn.execute(
+            text("ALTER TABLE details_mensuels ADD COLUMN montant_net FLOAT NOT NULL DEFAULT 0")
         )
 
 
@@ -99,10 +131,107 @@ def seed_default_catalogue_sections():
 
 seed_default_catalogue_sections()
 
+
+def seed_csv_catalogues():
+    data_dir = Path(__file__).resolve().parents[1] / "sgtm-frontend" / "public" / "data"
+    if not data_dir.exists():
+        return
+
+    db = Session(engine)
+    try:
+        csv_files = sorted(data_dir.glob("*.csv"))
+        for csv_file in csv_files:
+            with csv_file.open("r", encoding="utf-8-sig", newline="") as handle:
+                reader = csv.DictReader(handle, delimiter=";")
+                headers = list(reader.fieldnames or [])
+                rows = [dict(row or {}) for row in reader]
+
+            catalogue = (
+                db.query(CsvCatalogue)
+                .filter(CsvCatalogue.file_name == csv_file.name)
+                .first()
+            )
+            if not catalogue:
+                catalogue = CsvCatalogue(
+                    file_name=csv_file.name,
+                    display_name=csv_file.stem,
+                    delimiter=";",
+                    columns_json=json.dumps(headers, ensure_ascii=False),
+                    updated_at=datetime.utcnow(),
+                )
+                db.add(catalogue)
+                db.flush()
+            else:
+                catalogue.display_name = csv_file.stem
+                catalogue.delimiter = ";"
+                catalogue.columns_json = json.dumps(headers, ensure_ascii=False)
+                catalogue.updated_at = datetime.utcnow()
+                db.query(CsvCatalogueRow).filter(
+                    CsvCatalogueRow.catalogue_id == catalogue.id
+                ).delete()
+                db.flush()
+
+            for index, row in enumerate(rows, start=1):
+                db.add(
+                    CsvCatalogueRow(
+                        catalogue_id=catalogue.id,
+                        row_index=index,
+                        row_json=json.dumps(row, ensure_ascii=False),
+                    )
+                )
+
+        db.commit()
+    finally:
+        db.close()
+
+
+seed_csv_catalogues()
+
+
+def seed_analytics_dimensions():
+    db = Session(engine)
+    try:
+        existing_types = {row[0] for row in db.query(DimCostType.code).all()}
+        default_types = [
+            ("OTP", "Ligne OTP"),
+            ("SALARY", "Masse salariale"),
+            ("GASOIL", "Gasoil"),
+            ("MATERIAL", "Materiel"),
+            ("SUBCONTRACT", "Sous-traitance"),
+            ("SUPPLY", "Fournitures"),
+            ("OTHER", "Autres charges"),
+        ]
+        for code, label in default_types:
+            if code not in existing_types:
+                db.add(DimCostType(code=code, label=label))
+        db.commit()
+
+        today = date.today()
+        key = date_to_key(today)
+        existing_date = db.query(DimDate).filter(DimDate.date_key == key).first()
+        if not existing_date:
+            db.add(
+                DimDate(
+                    date_key=key,
+                    full_date=today,
+                    year=today.year,
+                    month=today.month,
+                    day=today.day,
+                    quarter=((today.month - 1) // 3) + 1,
+                )
+            )
+            db.commit()
+    finally:
+        db.close()
+
+
+seed_analytics_dimensions()
+
 #  routes
 app.include_router(project_router)
 app.include_router(budget_router)
 
 @app.get("/")
 def home():
-    return {"message": "ERP SGTM API is running 🚀"}
+    return {"message": "ERP SGTM API is running ðŸš€"}
+

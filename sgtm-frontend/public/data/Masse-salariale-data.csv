@@ -1,0 +1,143 @@
+﻿Sous section ;Fonction;Salaire mensuel
+Encadrement;Contract manager;30000
+Encadrement;Directeur de projet ;50000
+Encadrement;Directeur département lots thechniques;50000
+Encadrement;Directeur hse;30000
+Encadrement;Directeur technique;50000
+Encadrement;Directrice qualité;30000
+Encadrement;Directrice supply chain;30000
+Encadrement;Doc. Control;15000
+Encadrement;Ing méthodes;25000
+Encadrement;Ing travaux electrique;20000
+Encadrement;Ing travaux génie civil;20000
+Encadrement;Ing travaux mécanique;20000
+Encadrement;Manager electrique;20000
+Encadrement;Manager génie civil;25000
+Encadrement;Manager hse;20000
+Encadrement;Manager mécanique;20000
+Encadrement;Manager qualité;20000
+Encadrement;Manager technique  ;30000
+Encadrement;Métreur;20000
+Encadrement;Project control manager;30000
+Encadrement;Responsable electrique ;20000
+Encadrement;Responsable fire fighting;25000
+Encadrement;Responsable génie civil ;20000
+Encadrement;Responsable hse;25000
+Encadrement;Responsable hvac;25000
+Encadrement;Responsable logistique;20000
+Encadrement;Responsable logistique ;20000
+Encadrement;Responsable mécanique ;20000
+Encadrement;Responsable planning;25000
+Encadrement;Responsable qualité ;20000
+Encadrement;Responsable technique E&I;30000
+Encadrement;Responsable topographique;25000
+Encadrement;Service import / expediting;15000
+Équipe administrative;Agent pointeur;5616
+Équipe administrative;Chauffeur transport;5460
+Équipe administrative;Agent administratif;5772
+Équipe atelier mécanique;Aide mécanicien;5460
+Équipe atelier mécanique;Chauffeur camion entretien;5460
+Équipe atelier mécanique;Chef d'équipe mécanique;5928
+Équipe atelier mécanique;Eléctricien auto;5928
+Équipe atelier mécanique;Mécanicien;5616
+Équipe atelier mécanique;Mécanicien d'entretien;5616
+Équipe atelier mécanique;Soudeur;5772
+Équipe atelier mécanique;Tolier;5772
+Équipe atelier mécanique;Vulcanisateur;5772
+Équipe béton;Boiseur;5460
+Équipe béton;Caporal;5772
+Équipe béton;Chef d'équipe béton;5928
+Équipe béton;Maçon;5460
+Équipe béton;Manœuvre béton;5335,2
+Équipe béton;Menuisier béton;5616
+Équipe béton;Soudeur béton;5616
+Équipe cab;Chaffeur camion malaxeur;5460
+Équipe cab;Téchnicien cab;5616
+Équipe carburant;Chauffeur camion gazoil;5460
+Équipe carburant;Pompiste carburant;5616
+Équipe échafaudage;Chef d'équipe montage;7500
+Équipe échafaudage;Manœuvres;5335,2
+Équipe échafaudage;Monteur;5460
+Équipe éléctricité;Aide éléctricien ;5460
+Équipe éléctricité;Electricien industriel;5772
+Équipe ferraillage ;Caporal;5616
+Équipe ferraillage ;Caporal;5772
+Équipe ferraillage ;Chef d'équipe ferraillage;5928
+Équipe ferraillage ;ferrailleur;5460
+Équipe ferraillage ;Manœuvre ferraillage;5335,2
+Équipe gardiennage;Agent de surveillance;5335,2
+Équipe gardiennage;Chef d'équipe gardiennage;7000
+Équipe h.S.E;Animateur hse;5772
+Équipe h.S.E;Chauffeur ambulance;1750
+Équipe h.S.E;Coordinatrice hse;5000
+Équipe h.S.E;Employé;5000
+Équipe h.S.E;Inférmier;6000
+Équipe h.S.E;Superviseur hse;5928
+Équipe h.S.E;Superviseur levage;5928
+Équipe logistique;Agent suivi matériel;5616
+Équipe logistique;Chaffeur camion plateaux;5616
+Équipe logistique;Manœuvre;5335,2
+Équipe magasin;Magasinier;6000
+Équipe magasin;Manœuvre park magasin;5335,2
+Équipe magasin;Responsable park magasin;8000
+Équipe manutention logistique;Chauffeur camion 8*4;5460
+Équipe manutention logistique;Chef d'équipe manutention logistique;5928
+Équipe manutention logistique;Conducteur élevateur;5772
+Équipe manutention logistique;Grutier grue à tour;6240
+Équipe manutention logistique;Grutier grue mobile;6240
+Équipe manutention logistique;Guideur grue mobile;5335,2
+Équipe manutention logistique;Manœuvre;5335,2
+Équipe manutention logistique;Monteur grue ;5460
+Équipe manutention logistique;Pointeur grue mobile et a tour;5460
+Équipe nettoyage;Caporal nettoyage;5460
+Équipe nettoyage;Manœuvre nettoyage;5335,2
+Équipe peinture;Peintre ;5616
+Équipe qualité;Aide laborantin;5460
+Équipe qualité;Technicien laboratoire;5616
+Équipe qualité;Technicien qualité;5928
+Équipe second œuvre;chefs d'équipe;5616
+Équipe second œuvre;chefs d'équipe;5928
+Équipe second œuvre;Maçons;5460
+Équipe second œuvre;Manœuvres;5335,2
+Équipe second œuvre;Menuisiers;5616
+Équipe second œuvre;Peintres;5616
+Équipe second œuvre;Plâtriers;5616
+Équipe second œuvre;Plombiers;5616
+Équipe terrassement;Caporal terrassement ;5616
+Équipe terrassement;Chef d'équipe terrassement;5928
+Équipe terrassement;Conducteur bobcat;5772
+Équipe terrassement;Conducteur bulldozer;6240
+Équipe terrassement;Conducteur chargeuse;5928
+Équipe terrassement;Conducteur compacteur;5772
+Équipe terrassement;Conducteur niveleus;5928
+Équipe terrassement;Conducteur niveleuse;6240
+Équipe terrassement;Conducteur pelle;6084
+Équipe terrassement;Guideur;5335,2
+Équipe terrassement;Manœuvre terrassement;5335,2
+Équipe topographique;Niveleur;5772
+Équipe topographique;Operateur topo;7000
+Équipe topographique;Porte mire;5335,2
+Équipe topographique;Technicien topographe;5928
+Équipe travaux éléctrique;chefs d'équipe;5928
+Équipe travaux éléctrique;Manœuvres;5335,2
+Équipe travaux éléctrique;monteurs;8112
+Équipe travaux éléctrique;superviseur travaux ;5928
+Équipe travaux éléctrique;superviseur travaux ;8112
+Équipe travaux FF;chefs d'équipe;5928
+Équipe travaux FF;Manœuvres;5335,2
+Équipe travaux FF;monteurs;8112
+Équipe travaux HVAC;chefs d'équipe;5928
+Équipe travaux HVAC;Manœuvres;5335,2
+Équipe travaux HVAC;monteurs;8112
+Équipe travaux mécanique ;chaudronnier;8112
+Équipe travaux mécanique ;chefs d'équipe;5928
+Équipe travaux mécanique ;fitters;8112
+Équipe travaux mécanique ;foreman;8112
+Équipe travaux mécanique ;Manœuvres;5335,2
+Équipe travaux mécanique ;Mécanicien;5616
+Équipe travaux mécanique ;monteurs;8112
+Équipe travaux mécanique ;Profileurs;8112
+Équipe travaux mécanique ;Riggers;8112
+Équipe travaux mécanique ;Soudeurs;8112
+Équipe travaux mécanique ;superviseur travaux ;5928
+Équipe travaux mécanique ;tuyauteur;8112
