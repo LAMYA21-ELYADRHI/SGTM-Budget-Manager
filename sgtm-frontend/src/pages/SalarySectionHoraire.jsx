@@ -637,7 +637,7 @@ export default function SalarySectionHoraire({
         <div className="budget-details-row">
           <label className="budget-label budget-label-inline">
             <FiTable aria-hidden="true" />
-            <span>Details des jours/montant</span>
+            <span>Details des jours/montants</span>
           </label>
           <button type="button" className="btn-sm btn-secondary inline-action-btn" onClick={() => openQuantityModal("create")}>
             <FiEdit aria-hidden="true" />
@@ -688,6 +688,7 @@ export default function SalarySectionHoraire({
                       className="table-inline-input"
                       type="number"
                       min={0}
+                      max={31}
                       step="1"
                       value={String(inlineEffectifDrafts[line.id] ?? line.effectif ?? 0)}
                       onChange={(event) =>
