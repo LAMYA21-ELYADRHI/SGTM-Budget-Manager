@@ -511,7 +511,7 @@ export default function SalarySectionHoraire({
     const nextHourlyPrice = parseAmount(inlineHourlyPriceDrafts[line.id] ?? line.hourlyPrice);
     const nextHoursPerDay = parseAmount(inlineHoursPerDayDrafts[line.id] ?? line.hoursPerDay);
     if (nextEffectif <= 0 || nextHourlyPrice <= 0 || nextHoursPerDay <= 0) {
-      alert("Effectif, Prix J/H et Nombre heures doivent etre superieurs a 0.");
+      alert("Effectif, Prix H/J et Nombre heures doivent etre superieurs a 0.");
       return;
     }
 
@@ -621,7 +621,7 @@ export default function SalarySectionHoraire({
 
         <div className="budget-form-row budget-form-row-mid">
           <div className="budget-field-group">
-            <label className="budget-label">Prix J/H</label>
+            <label className="budget-label">Prix H/J</label>
             <input type="number" min={0} step="0.01" value={hourlyPrice} onChange={(event) => setHourlyPrice(event.target.value)} />
           </div>
           <div className="budget-field-group">
@@ -647,7 +647,7 @@ export default function SalarySectionHoraire({
 
         <div className="budget-summary-bar">
           <div className="budget-summary-item"><FiHash aria-hidden="true" /><span>Nbr jours</span><b>{formatAmount(totalDays)}</b></div>
-          <div className="budget-summary-item"><FiDollarSign aria-hidden="true" /><span>Prix J/H</span><b>{formatAmount(selectedHourlyPrice)} DH</b></div>
+          <div className="budget-summary-item"><FiDollarSign aria-hidden="true" /><span>Prix H/J</span><b>{formatAmount(selectedHourlyPrice)} DH</b></div>
           <div className="budget-summary-item"><FiTrendingUp aria-hidden="true" /><span>MontantTotal</span><b>{formatAmount(currentTotal)} DH</b></div>
         </div>
 
@@ -666,7 +666,7 @@ export default function SalarySectionHoraire({
               <th><span className="budget-th-label"><FiLayers aria-hidden="true" /><span>Sous-section</span></span></th>
               <th><span className="budget-th-label"><FiFile aria-hidden="true" /><span>Fonction</span></span></th>
               <th><span className="budget-th-label"><FiHash aria-hidden="true" /><span>Effectif</span></span></th>
-              <th><span className="budget-th-label"><FiDollarSign aria-hidden="true" /><span>Prix J/H</span></span></th>
+              <th><span className="budget-th-label"><FiDollarSign aria-hidden="true" /><span>Prix H/J</span></span></th>
               <th><span className="budget-th-label"><FiHash aria-hidden="true" /><span>Nbr Heures</span></span></th>
               <th><span className="budget-th-label"><FiHash aria-hidden="true" /><span>Nbr jours</span></span></th>
               <th><span className="budget-th-label"><FiTrendingUp aria-hidden="true" /><span>MontantTotal</span></span></th>
