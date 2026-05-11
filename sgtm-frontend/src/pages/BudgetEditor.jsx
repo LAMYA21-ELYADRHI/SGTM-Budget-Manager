@@ -52,7 +52,6 @@ import {
   deriveGasoilRows,
   parseGasoilCatalogueCsv,
   serializeGasoilRowToPayload,
-  sumGasoilRows,
 } from "../services/gasoil";
 import SalarySection from "./SalarySection";
 import SalarySectionHoraire from "./SalarySectionHoraire";
@@ -303,6 +302,20 @@ const parseUnitPrice = (value) => {
 const parseFlexibleNumber = (value) => {
   const parsed = Number(String(value || "").replace(",", ".").trim());
   return Number.isFinite(parsed) ? parsed : NaN;
+};
+
+const toFiniteNumber = (value) => {
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const computeGasoilRowTotal = (row) => {
+  const nombreJours = toFiniteNumber(row?.nombreJours);
+  const nombreMateriels = toFiniteNumber(row?.nombreMateriels ?? row?.qty);
+  const heuresMarche = toFiniteNumber(row?.heuresMarche);
+  const consommationLH = toFiniteNumber(row?.consommationLH);
+  const prixPerL = toFiniteNumber(row?.prixPerL ?? row?.pu);
+  return nombreJours * nombreMateriels * heuresMarche * consommationLH * prixPerL;
 };
 
 const roundAmount = (value) => Number(Number(value || 0).toFixed(2));
@@ -762,7 +775,7 @@ export default function BudgetEditor() {
           const preservedPriceRaw = savedRow?.pu ?? null;
           const preservedPrice =
             preservedPriceRaw === "" || preservedPriceRaw == null ? null : Number(preservedPriceRaw);
-          return cloneGasoilRowSnapshot({
+          const savedRowSnapshot = {
             ...draftRow,
             id: savedRow.id || draftRow.id,
             isPersisted: true,
@@ -770,7 +783,17 @@ export default function BudgetEditor() {
             montantTotal: Number(savedRow?.total ?? draftRow.montantTotal ?? 0),
             nombreMateriels: Number(savedRow?.qty ?? draftRow.nombreMateriels ?? 0),
             nombreJours: Number(savedRow?.nombreJours ?? draftRow.nombreJours ?? 0),
+            heuresMarche: Number(savedRow?.heuresMarche ?? draftRow.heuresMarche ?? 0),
+            consommationLH: Number(savedRow?.consommationLH ?? draftRow.consommationLH ?? 0),
             sourceMaterialLineId: sourceId || savedRow?.sourceMaterialLineId || "",
+          };
+          const recomputedTotal = computeGasoilRowTotal(savedRowSnapshot);
+          return cloneGasoilRowSnapshot({
+            ...savedRowSnapshot,
+            montantTotal:
+              Number(savedRowSnapshot.montantTotal) > 0
+                ? Number(savedRowSnapshot.montantTotal)
+                : recomputedTotal,
           });
         }
 
@@ -842,10 +865,13 @@ export default function BudgetEditor() {
     (scope, sectionCode) => {
       if (!scope) return 0;
       if (sectionCode === "GASOIL") {
-        return sumGasoilRows(buildGasoilRowsForScope(scope));
+        return buildGasoilRowsForScope(scope).reduce(
+          (sum, row) => sum + computeGasoilRowTotal(row),
+          0
+        );
       }
       return collectSectionLines(scope, sectionCode).reduce(
-        (sum, line) => sum + Number(line?.total ?? line?.montant_total ?? 0),
+        (sum, line) => sum + toFiniteNumber(line?.total ?? line?.montant_total),
         0
       );
     },
